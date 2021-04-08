@@ -1,0 +1,18 @@
+---
+title: "Plant taxa"
+output: html_notebook
+---
+
+# Setup
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(here)
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+```

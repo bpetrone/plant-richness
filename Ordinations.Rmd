@@ -1,0 +1,75 @@
+---
+title: "Ordinations"
+output: html_notebook
+---
+
+## Setup
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(here)
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+```
+
+## Load input data
+
+```{r}
+# Joint phyloseq object
+ps <- 
+     here('data', 'processed', 'phyloseq', '20210408_ps_trnL.rds') %>% 
+     readRDS()
+
+ps
+```
+
+## Transform
+
+```{r}
+# Add pseudocount before relative abundance transform
+otu_table(ps) <- otu_table(ps) + 1
+```
+
+```{r}
+# CLR
+asvtab <- otu_table(ps)@.Data
+asvtab.clr <- driver::clr(asvtab)
+
+# Replace names, but remember these aren't interpretable as strict ASVs any longer
+colnames(asvtab.clr) <- colnames(asvtab)
+
+# Make updated phyloseq object
+ps.clr <- phyloseq(otu_table(asvtab.clr, taxa_are_rows = FALSE),
+                   sample_data(sample_data(ps)),
+                   tax_table(tax_table(ps)))
+```
+
+## PERMANOVA
+
+```{r}
+samdf <- data.frame(ps.clr@sam_data)
+samdf
+```
+```{r}
+# Sequencing batch
+vegan::adonis(distance(ps.clr, method = 'euclidean') ~ seq_date, 
+              data = samdf)
+```
+
+```{r}
+# Study
+vegan::adonis(distance(ps.clr, method = 'euclidean') ~ study, 
+              data = samdf)
+```
+
+```{r}
+# Individual
+vegan::adonis(distance(ps.clr, method = 'euclidean') ~ subj, 
+              data = samdf)
+```
+

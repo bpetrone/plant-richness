@@ -1,0 +1,217 @@
+---
+title: "Mantel tests"
+output: html_notebook
+---
+
+# Setup
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(here)
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+```
+
+# Load input data
+
+## trnL metabarcoding
+
+```{r}
+# Joint phyloseq object
+ps <- 
+     here('data', 'processed', 'phyloseq', '20210408_ps_trnL.rds') %>% 
+     readRDS()
+
+ps
+```
+
+## DHQ3
+
+### CHOMP
+
+#### FNDDS nutrients
+
+```{r}
+# All FNDDS nutrients (64)
+dhq3.nut.chomp <- 
+     here('data', 'processed', 'DHQ3',
+          '20201022_DHQ3 kcal-normalized FNDDS nutrients_chomp.rds') %>% 
+     readRDS()
+```
+
+#### Food groups
+
+```{r} 
+# All food groups (41)
+dhq3.foodgroups.chomp <- 
+     here('data', 'processed', 'DHQ3', 
+          '20201022_DHQ3 kcal-normalized food groups_chomp.rds') %>% 
+     readRDS()
+
+# Only plant-derived food groups (but NOT including oils, solid fats, sweeteners, or alcohols) (22)
+dhq3.plantgroups.chomp <- 
+     here('data', 'processed', 'DHQ3', 
+          '20201022_DHQ3 kcal-normalized plant food groups_chomp.rds') %>% 
+     readRDS()
+```
+
+### ONR
+
+#### FNDDS nutrients
+
+```{r}
+# All FNDDS nutrients (64)
+dhq3.nut.onr <- 
+     here('data', 'processed', 'DHQ3',
+          '20210305_DHQ3 kcal-normalized FNDDS nutrients_onr.rds') %>% 
+     readRDS()
+```
+
+#### Food groups
+
+```{r}
+# All food groups (41)
+dhq3.foodgroups.onr <- 
+     here('data', 'processed', 'DHQ3', 
+          '20210305_DHQ3 kcal-normalized food groups_onr.rds') %>% 
+     readRDS()
+
+# Only plant-derived food groups (but NOT including oils, solid fats, sweeteners, or alcohols) (22)
+dhq3.plantgroups.onr <-
+     here('data', 'processed', 'DHQ3', 
+          '20210305_DHQ3 kcal-normalized plant food groups_onr.rds') %>% 
+     readRDS()
+```
+
+# Prepare
+
+## trnL
+
+```{r}
+# Add pseudocount before relative abundance transform
+otu_table(ps) <- otu_table(ps) + 1
+```
+
+### Convert to relative abundance
+
+```{r}
+ps.ra <- transform_sample_counts(ps, function(x){x/sum(x)})
+```
+
+### Merge within each subject
+
+```{r}
+ps.ra.merged <- merge_samples(ps.ra, 'subj')
+
+# Now, need to normalize by total number of samples for each subject to return sums to 1
+ps.ra.merged <- transform_sample_counts(ps.ra.merged,
+                                        function(x){x/sum(x)})
+```
+
+### CLR transform
+
+```{r}
+# CLR
+asvtab <- otu_table(ps.ra.merged)@.Data
+asvtab.clr <- driver::clr(asvtab)
+
+# Replace names, but remember these aren't interpretable as strict ASVs any longer
+colnames(asvtab.clr) <- colnames(asvtab)
+```
+
+## DHQ3
+
+### Concatenate dataframes
+
+```{r}
+# DHQ3
+dhq3.nut <- bind_rows(dhq3.nut.chomp, dhq3.nut.onr)
+dhq3.foodgroups <- bind_rows(dhq3.foodgroups.chomp, dhq3.foodgroups.onr)
+dhq3.plantgroups <- bind_rows(dhq3.plantgroups.chomp, dhq3.plantgroups.onr)
+```
+
+```{r}
+# Remove original variables
+rm(list = ls()[grep('.chomp$|.onr$', ls())])
+```
+
+### Check completeness
+
+```{r}
+any(is.na(dhq3.nut))
+any(is.na(dhq3.foodgroups))
+any(is.na(dhq3.plantgroups))
+```
+
+Ok, DHQ3 appears to have missing data:
+
+```{r}
+missing <- apply(dhq3.nut, 1, function(x){any(is.na(x))})
+which(missing)
+```
+
+```{r}
+# Remove
+dhq3.nut <- dhq3.nut[!missing, ]
+dhq3.foodgroups <- dhq3.foodgroups[!missing, ]
+dhq3.plantgroups <- dhq3.plantgroups[!missing, ]
+```
+
+```{r}
+# Confirm
+any(is.na(dhq3.nut))
+any(is.na(dhq3.foodgroups))
+any(is.na(dhq3.plantgroups))
+```
+
+# Mantel
+
+## Match samples 
+```{r}
+# Subset to shared samples
+shared <- intersect(row.names(dhq3.nut),
+                    sample_names(ps.ra.merged))
+
+length(shared)
+```
+
+## Calculate distance
+
+### Within-trnL
+
+```{r}
+# Euclidean distance on CLR-transformed counts
+dist.trnL <- dist(asvtab.clr[shared, ], method = 'euclidean')
+```
+
+
+### Within-DHQ3
+
+```{r}
+dist.dhq3.nut <- dist(dhq3.nut[shared, ], method = 'euclidean')
+dist.dhq3.plantgroups <- dist(dhq3.plantgroups[shared, ], method = 'euclidean') 
+```
+
+## Run
+
+```{r}
+mantel(dist.trnL, dist.dhq3.nut)
+```
+
+```{r}
+mantel(dist.trnL, dist.dhq3.plantgroups)
+```
+
+```{r}
+# Off the cuff: animal food groups
+animal <- c(19:28, 34:41) # Columns corresponding to animal foods
+colnames(dhq3.foodgroups[, animal])
+dist.dhq3.animal <- dist(dhq3.foodgroups[shared, animal], method = 'euclidean') 
+
+mantel(dist.trnL, dist.dhq3.animal)
+```
+
