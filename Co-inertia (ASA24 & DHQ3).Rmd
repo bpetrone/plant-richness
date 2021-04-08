@@ -1,0 +1,344 @@
+---
+title: "Co-inertia: ASA24 & DHQ3"
+author: "Brianna Petrone"
+output: html_notebook
+---
+
+# Setup
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(ade4) # For co-inertia functions
+library(here)
+library(tidyverse)
+
+source(here('..', 'functions', 'top_loadings.R'))
+source(here('..', 'functions', 'rand_axis_test.R'))
+```
+
+# Load input data
+
+## ASA24
+
+### CHOMP
+
+```{r}
+data.dir <- here('data', 'processed', 'ASA24')
+list.files(data.dir)
+
+# Nutrients
+asa24.nut.chomp <- 
+    readRDS(file.path(data.dir, "20200405_Nutrients, kcal-normalized, all records_chomp.rds"))
+
+# Food groups
+asa24.foodgroups.chomp <- 
+    readRDS(file.path(data.dir, 
+                      "20200405_Food groups, kcal-normalized, all records_chomp.rds"))
+
+# Plant food groups
+asa24.plantgroups.chomp <- 
+    readRDS(file.path(data.dir, 
+                      "20200405_Plant food groups, kcal-normalized, all records_chomp.rds"))
+```
+
+### ONR
+
+```{r}
+# Nutrients
+asa24.nut.onr <- 
+    readRDS(file.path(data.dir, "20200405_Nutrients, kcal-normalized, all records_onr.rds"))
+
+# Food groups
+asa24.foodgroups.onr <- 
+    readRDS(file.path(data.dir, 
+                      "20200405_Food groups, kcal-normalized, all records_onr.rds"))
+
+# Plant food groups
+asa24.plantgroups.onr <- 
+    readRDS(file.path(data.dir, 
+                      "20200405_Plant food groups, kcal-normalized, all records_onr.rds"))
+```
+
+## DHQ3
+
+### CHOMP
+
+#### FNDDS nutrients
+
+```{r}
+# All FNDDS nutrients (64)
+dhq3.nut.chomp <- 
+     here('data', 'processed', 'DHQ3',
+          '20201022_DHQ3 kcal-normalized FNDDS nutrients_chomp.rds') %>% 
+     readRDS()
+```
+
+#### Food groups
+
+```{r} 
+# All food groups (41)
+dhq3.foodgroups.chomp <- 
+     here('data', 'processed', 'DHQ3', 
+          '20201022_DHQ3 kcal-normalized food groups_chomp.rds') %>% 
+     readRDS()
+
+# Only plant-derived food groups (but NOT including oils, solid fats, sweeteners, or alcohols) (22)
+dhq3.plantgroups.chomp <- 
+     here('data', 'processed', 'DHQ3', 
+          '20201022_DHQ3 kcal-normalized plant food groups_chomp.rds') %>% 
+     readRDS()
+```
+
+### ONR
+
+#### FNDDS nutrients
+
+```{r}
+# All FNDDS nutrients (64)
+dhq3.nut.onr <- 
+     here('data', 'processed', 'DHQ3',
+          '20210305_DHQ3 kcal-normalized FNDDS nutrients_onr.rds') %>% 
+     readRDS()
+```
+
+#### Food groups
+
+```{r}
+# All food groups (41)
+dhq3.foodgroups.onr <- 
+     here('data', 'processed', 'DHQ3', 
+          '20210305_DHQ3 kcal-normalized food groups_onr.rds') %>% 
+     readRDS()
+
+# Only plant-derived food groups (but NOT including oils, solid fats, sweeteners, or alcohols) (22)
+dhq3.plantgroups.onr <-
+     here('data', 'processed', 'DHQ3', 
+          '20210305_DHQ3 kcal-normalized plant food groups_onr.rds') %>% 
+     readRDS()
+```
+
+# Tidy
+
+## Concatenate dataframes
+
+```{r}
+# ASA24
+asa24.nut <- bind_rows(asa24.nut.chomp, asa24.nut.onr)
+asa24.foodgroups <- bind_rows(asa24.foodgroups.chomp, asa24.foodgroups.onr)
+asa24.plantgroups <- bind_rows(asa24.plantgroups.chomp, asa24.plantgroups.onr)
+```
+
+```{r}
+# DHQ3
+dhq3.nut <- bind_rows(dhq3.nut.chomp, dhq3.nut.onr)
+dhq3.foodgroups <- bind_rows(dhq3.foodgroups.chomp, dhq3.foodgroups.onr)
+dhq3.plantgroups <- bind_rows(dhq3.plantgroups.chomp, dhq3.plantgroups.onr)
+```
+
+```{r}
+# Remove original variables
+rm(list = ls()[grep('.chomp$|.onr$', ls())])
+```
+
+## Check completeness
+
+```{r}
+any(is.na(asa24.nut))
+any(is.na(asa24.foodgroups))
+any(is.na(asa24.plantgroups))
+
+any(is.na(dhq3.nut))
+any(is.na(dhq3.foodgroups))
+any(is.na(dhq3.plantgroups))
+```
+
+Ok, DHQ3 appears to have missing data:
+
+```{r}
+missing <- apply(dhq3.nut, 1, function(x){any(is.na(x))})
+which(missing)
+```
+
+```{r}
+# Remove
+dhq3.nut <- dhq3.nut[!missing, ]
+dhq3.foodgroups <- dhq3.foodgroups[!missing, ]
+dhq3.plantgroups <- dhq3.plantgroups[!missing, ]
+```
+
+```{r}
+# Confirm
+any(is.na(dhq3.nut))
+any(is.na(dhq3.foodgroups))
+any(is.na(dhq3.plantgroups))
+```
+
+## Combine ASA24
+
+### Combine
+
+```{r}
+# Create function that averages ASAs within an individual together
+asa_average <- function(x){
+     # Takes dataframe of ASA24 values, with rownames of format [subj]_[recall],
+     # and returns a dataframe with subjects as rows, and all column values 
+     # averaged within a subject
+     x %>% 
+     rownames_to_column(var = 'ID') %>% 
+     separate(ID, into = c('ID', 'recall'), sep = '_') %>% 
+     group_by(ID) %>% 
+     summarize_at(vars(-recall), mean) %>% 
+     column_to_rownames(var = 'ID')
+}
+```
+
+```{r}
+# Apply to files
+asa24.nut.avg <- asa_average(asa24.nut)
+asa24.foodgroups.avg <- asa_average(asa24.foodgroups)
+asa24.plantgroups.avg <- asa_average(asa24.plantgroups)
+```
+
+## Replicate DHQ3
+
+```{r}
+# TODO
+```
+
+# Co-inertia
+
+## Subset to shared samples
+
+```{r}
+# Shared rows in averaged ASA24 and DHQ3 data
+shared.avg <- intersect(row.names(asa24.nut.avg), row.names(dhq3.nut))
+
+# Note missing samples from either set
+cat('Subjects who completed an ASA24, but not a DHQ3:\n',
+    setdiff(row.names(asa24.nut.avg), row.names(dhq3.nut)), '\n')
+cat('Subjects who completed an ASA24, but not a DHQ3:\n',
+    setdiff(row.names(dhq3.nut), row.names(asa24.nut.avg)), '\n')
+```
+
+```{r}
+# Shared rows in ASA24 and replicated DHQ3 data
+```
+
+## PCA
+
+Should think about-- is scaling actually appropriate here? 
+Need to justify to myself that this is the case.
+
+```{r}
+# Ordinate ASA24 input data with PCA
+dudi.asa24.nut.avg <- dudi.pca(asa24.nut.avg[shared.avg, ], 
+                               center = TRUE, scale = TRUE,
+                               scannf = FALSE, nf = 2)
+
+dudi.asa24.foodgroups.avg <- dudi.pca(asa24.foodgroups.avg[shared.avg, ],
+                                      center = TRUE, scale = TRUE,
+                                      scannf = FALSE, nf = 2)
+```
+
+```{r}
+# Cumulative relative variation of eigenvalues
+cumsum(dudi.asa24.nut.avg$eig / sum(dudi.asa24.nut.avg$eig)) %>% 
+     plot()
+```
+
+```{r}
+# Ordinate DHQ3 input data with PCA
+dudi.dhq3.nut <- dudi.pca(dhq3.nut[shared.avg, ], 
+                          center = TRUE, scale = TRUE,
+                          scannf = FALSE, nf = 2)
+
+dudi.dhq3.foodgroups <- dudi.pca(dhq3.foodgroups[shared.avg, ],
+                                 center = TRUE, scale = TRUE,
+                                 scannf = FALSE, nf = 2)
+```
+
+```{r}
+# Cumulative relative variation of eigenvalues 
+cumsum(dudi.dhq3.nut$eig / sum(dudi.asa24.nut.avg$eig)) %>% 
+     plot()
+```
+## Co-inertia
+
+### Nutrients
+
+```{r}
+# Are the row weights equal?
+all.equal(dudi.asa24.nut.avg$lw, dudi.dhq3.nut$lw)
+```
+
+```{r}
+# Run
+coia.nut <- coinertia(dudi.asa24.nut.avg, dudi.dhq3.nut, 
+                      scannf = FALSE, nf = 2)
+
+summary(coia.nut)
+```
+
+```{r}
+# Relative variation on first eigenvalue 
+coia.nut$eig[1] / sum(coia.nut$eig) 
+```
+
+```{r}
+randtest(coia.nut, nrepet = 999) 
+```
+
+```{r}
+# Plot global data
+
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+pdf(here('results', 'co-inertia',
+         paste0(plotID,
+                '_Global plot, ASA24 nutrients v. DHQ3 nutrients.pdf')),
+    height = 20, width = 20)
+plot(coia.nut)
+
+# Relevant plotIDs:
+# 2021-04-07.359: First pass
+```
+
+### Food groups
+
+```{r}
+# Are the row weights equal?
+all.equal(dudi.asa24.foodgroups.avg$lw, dudi.dhq3.foodgroups$lw)
+```
+
+```{r}
+# Run
+coia.foodgroups <- coinertia(dudi.asa24.foodgroups.avg, dudi.dhq3.foodgroups, 
+                             scannf = FALSE, nf = 2)
+
+summary(coia.foodgroups)
+```
+
+```{r}
+# Relative variation on first eigenvalue 
+coia.foodgroups$eig[1] / sum(coia.foodgroups$eig) 
+```
+
+```{r}
+randtest(coia.foodgroups, nrepet = 999) 
+```
+
+```{r}
+# Plot global data
+
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+pdf(here('results', 'co-inertia',
+         paste0(plotID,
+                '_Global plot, ASA24 food groups v. DHQ3 food groups.pdf')),
+    height = 20, width = 20)
+plot(coia.foodgroups)
+
+# Relevant plotIDs:
+# 2021-04-07.313: First pass
+```
