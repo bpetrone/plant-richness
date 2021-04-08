@@ -117,6 +117,6 @@ ps <- merge_phyloseq(ps.chomp, ps.onr)
 
 ```{r}
 # saveRDS(ps, here('data', 'processed', 'phyloseq',
-               # '20210408_ps_trnL.rds'))
+# '20210408_ps_trnL.rds'))
 ```
 
