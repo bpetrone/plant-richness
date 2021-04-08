@@ -52,7 +52,7 @@ CHOMP phyloseq object contains Wednesday and Thursday samples sequenced on two s
 # Substituted Feb 2021 run in place of Mar 2020
 ps.chomp <- 
     ps.chomp %>% 
-    subset_samples(seq_date != 'Mar 2020') %>% 
+    subset_samples(seq_date != '20200304') %>% 
     prune_taxa(taxa_sums(.) > 0, .)
 ```
 
@@ -72,7 +72,7 @@ dups <- sample_data(ps.chomp)$name[duplicated(sample_data(ps.chomp)$name)]
 # Remove them and their associated taxa
 ps.chomp <- 
     ps.chomp %>% 
-    subset_samples(!(name %in% dups & seq_date == 'Dec 2020')) %>% 
+    subset_samples(!(name %in% dups & seq_date == '20201201')) %>% 
     prune_taxa(taxa_sums(.) > 0, .)
 
 # Rename all samples
@@ -115,8 +115,22 @@ setdiff(sample_variables(ps.onr), sample_variables(ps.chomp))
 ps <- merge_phyloseq(ps.chomp, ps.onr)
 ```
 
+### Convert variable types
+
+Weird, couldn't figure out how to do dates prior to merge_phyloseq step; was getting an error that origin wasn't specified, though I thought I had when initializing both objects.
+
 ```{r}
-# saveRDS(ps, here('data', 'processed', 'phyloseq',
-# '20210408_ps_trnL.rds'))
+# Date type
+sample_data(ps)$seq_date <- 
+     as.Date(as.character(sample_data(ps)$seq_date),
+             format = '%Y%m%d', origin = '1900-01-01')
+
+# Factor type
+sample_data(ps)$study <- factor(sample_data(ps)$study)
+```
+
+```{r}
+saveRDS(ps, here('data', 'processed', 'phyloseq',
+                 '20210408_ps_trnL.rds'))
 ```
 
