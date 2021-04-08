@@ -1,0 +1,122 @@
+---
+title: "Joint phyloseq"
+output: html_notebook
+---
+
+# Setup
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(here)
+library(phyloseq)
+library(tidyverse)
+```
+
+# Load input data
+
+## trnL metabarcoding
+
+### CHOMP
+
+```{r}
+ps.chomp <- 
+     here('data', 'processed', 'phyloseq', '20210222_ps_trnL_chomp.rds') %>% 
+     readRDS()
+```
+
+### ONR
+```{r}
+ps.onr <- 
+     here('data', 'processed', 'phyloseq', '20210331_ps_trnL_onr.rds') %>% 
+     readRDS()
+```
+
+# Pre-process data
+
+## trnL
+
+### Filter
+
+```{r}
+# Remove controls
+ps.chomp <- subset_samples(ps.chomp, type == 'sample')
+```
+
+CHOMP phyloseq object contains Wednesday and Thursday samples sequenced on two separate runs; keep only the second of these (February 2021). 
+
+```{r}
+# Select only MiniSeq experiments of interest:
+# Substituted Feb 2021 run in place of Mar 2020
+ps.chomp <- 
+    ps.chomp %>% 
+    subset_samples(seq_date != 'Mar 2020') %>% 
+    prune_taxa(taxa_sums(.) > 0, .)
+```
+
+```{r}
+# Remove samples sequenced >1 time
+# Currently, these include a set of WR samples that were sequenced in both December (1 ul input volume, 8 cycles) and February (3 ul input volume, 10 cycles): keep Feb
+
+# Add sample name
+sample_data(ps.chomp)$name <- paste(sample_data(ps.chomp)$subj,
+                                    sample_data(ps.chomp)$CH_week,
+                                    sample_data(ps.chomp)$CH_weekday,
+                                    sep = '_')
+
+# Get list of duplicates
+dups <- sample_data(ps.chomp)$name[duplicated(sample_data(ps.chomp)$name)]
+
+# Remove them and their associated taxa
+ps.chomp <- 
+    ps.chomp %>% 
+    subset_samples(!(name %in% dups & seq_date == 'Dec 2020')) %>% 
+    prune_taxa(taxa_sums(.) > 0, .)
+
+# Rename all samples
+sample_names(ps.chomp) <- sample_data(ps.chomp)$name
+
+rm(dups)
+ps.chomp
+```
+
+### Synchronize metadata
+
+```{r}
+# Add study column for each
+sample_data(ps.chomp)$study <- 'CHOMP'
+sample_data(ps.onr)$study <- 'ONR'
+```
+
+```{r}
+intersect(sample_variables(ps.chomp), sample_variables(ps.onr))
+```
+
+```{r}
+# In CHOMP, but not in ONR
+setdiff(sample_variables(ps.chomp), sample_variables(ps.onr))
+```
+
+```{r}
+# In ONR, but not in CHOMP
+setdiff(sample_variables(ps.onr), sample_variables(ps.chomp))
+```
+
+```{r}
+# Reconcile differences thoughtfully :P
+# TODO
+```
+
+### Merge
+
+```{r}
+ps <- merge_phyloseq(ps.chomp, ps.onr)
+```
+
+```{r}
+# saveRDS(ps, here('data', 'processed', 'phyloseq',
+               # '20210408_ps_trnL.rds'))
+```
+
