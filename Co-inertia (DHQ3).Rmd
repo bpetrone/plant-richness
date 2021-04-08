@@ -1,0 +1,170 @@
+---
+title: "Co-inertia"
+author: "Brianna Petrone"
+output: html_notebook
+---
+
+# Setup
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(ade4) # For co-inertia functions
+library(here)
+library(phyloseq)
+library(tidyverse)
+```
+
+# Load input data
+
+## trnL metabarcoding
+
+```{r}
+# Joint phyloseq object
+ps <- readRDS(here('data', 'processed', 'phyloseq', '20210408_ps_trnL.rds'))
+```
+
+## DHQ3
+
+### CHOMP
+
+#### FNDDS nutrients
+
+```{r}
+# All FNDDS nutrients (64)
+fndds.chomp <- 
+     here('data', 'processed', 'DHQ3',
+          '20201022_DHQ3 kcal-normalized FNDDS nutrients_chomp.rds') %>% 
+     readRDS()
+```
+
+#### Food groups
+
+```{r} 
+# All food groups (41)
+foodgroups.chomp <- 
+     here('data', 'processed', 'DHQ3', 
+          '20201022_DHQ3 kcal-normalized food groups_chomp.rds') %>% 
+     readRDS()
+
+# Only plant-derived food groups (but NOT including oils, solid fats, sweeteners, or alcohols) (22)
+foodgroups.plant.chomp <- 
+     here('data', 'processed', 'DHQ3', 
+          '20201022_DHQ3 kcal-normalized plant food groups_chomp.rds') %>% 
+     readRDS()
+```
+
+### ONR
+
+#### FNDDS nutrients
+
+```{r}
+# All FNDDS nutrients (64)
+fndds.onr <- 
+     here('data', 'processed', 'DHQ3',
+          '20210305_DHQ3 kcal-normalized FNDDS nutrients_onr.rds') %>% 
+     readRDS()
+```
+
+#### Food groups
+
+```{r}
+# All food groups (41)
+foodgroups.onr <- 
+     here('data', 'processed', 'DHQ3', 
+          '20210305_DHQ3 kcal-normalized food groups_onr.rds') %>% 
+     readRDS()
+
+# Only plant-derived food groups (but NOT including oils, solid fats, sweeteners, or alcohols) (22)
+foodgroups.plant.onr <-
+     here('data', 'processed', 'DHQ3', 
+          '20210305_DHQ3 kcal-normalized plant food groups_onr.rds') %>% 
+     readRDS()
+```
+
+# Pre-process data
+
+## trnL
+
+## DHQ3
+
+### Merge
+
+```{r}
+fndds <- bind_rows(fndds.chomp, fndds.onr)
+foodgroups <- bind_rows(foodgroups.chomp, foodgroups.onr)
+foodgroups.plant <- bind_rows(foodgroups.plant.chomp, foodgroups.plant.onr)
+```
+
+### Filter missing data
+
+```{r}
+# Find subjects without any DHQ3 data
+missing.dhq <- apply(is.na(fndds), 1, all) # Rows with all entries NA
+cat(sum(missing.dhq), "participants are missing a DHQ3")
+
+# Subset to only these samples
+with.dhq <- names(missing.dhq[missing.dhq == FALSE]) %>% sort()
+
+rm(missing.dhq)
+```
+
+Subset each of the DHQ3 objects accordingly
+```{r}
+fndds <- fndds[with.dhq,]
+foodgroups <- foodgroups[with.dhq,]
+foodgroups.plant <- foodgroups.plant[with.dhq,]
+
+rm(with.dhq)
+```
+
+```{r}
+# Clean up workspace
+# Remove separate CHOMP and ONR variables, now that we have merged versions
+rm(list = ls(pattern = "[onr|chomp]$"))
+```
+
+# Transform
+
+```{r}
+# Relative abundance
+otu_table(ps) <- otu_table(ps) + 1
+ps.ra <- transform_sample_counts(ps, function(x){x/sum(x)})
+```
+
+
+#### Merge
+##### Samples 
+```{r}
+ps.trnL.merged <- merge_samples(ps.ra, 'subj')
+# ps.trnL.merged <- merge_samples(ps.trnL.merged, 'subj')
+# Return relative abundances to sum to 1 by dividing by number of samples merged
+ps.trnL.merged <- transform_sample_counts(ps.trnL.merged, function(x) x/sum(x))
+ps.trnL.merged
+```
+
+# Co-inertia
+
+### Merge trnL
+```{r}
+# Generate CLR-transformed trnL data
+asvtab.trnL.ra <- otu_table(ps.trnL.merged)@.Data
+asvtab.trnL.clr <- driver::clr(asvtab.trnL.ra) 
+# Replace names, but remember these aren't interpretable as strict ASVs any longer
+colnames(asvtab.trnL.clr) <- colnames(asvtab.trnL.ra)
+```
+
+```{r}
+# Find shared samples in inputs (24 subjects)
+shared <- intersect(row.names(asvtab.trnL.ra), with.dhq)
+length(shared)
+```
+
+```{r}
+# Check rownames equal
+# all(row.names(asvtab.trnL.clr) == row.names(foodgroups.plant.dup))
+all(row.names(asvtab.trnL.clr[shared, ]) == row.names(foodgroups.plant[shared, ]))
+```
+
