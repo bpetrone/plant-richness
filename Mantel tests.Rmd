@@ -3,6 +3,14 @@ title: "Mantel tests"
 output: html_notebook
 ---
 
+There are a few different ways these comparisons could be done.  List them out:
+- DHQ3 (1 observation per participant)
+     + Compare each DHQ3 to averaged trnL compositions
+     - Replicate each DHQ3 up to match the number of trnL samples from a given participant
+- ASA24 (2-3 observations per participant)
+     + Average all ASA24s, and compare them to averaged trnL compositions
+     - Try to match ASA24s to stool samples
+
 # Setup
 ```{r setup, include=FALSE, echo=FALSE}
 require("knitr")
@@ -87,6 +95,63 @@ dhq3.plantgroups.onr <-
      readRDS()
 ```
 
+## ASA24 
+
+### CHOMP
+
+#### Nutrients
+
+```{r}
+asa24.nut.chomp <- 
+     here('data', 'processed', 'ASA24', 
+          '20210405_Nutrients, kcal-normalized, all records_chomp.rds') %>% 
+     readRDS()
+```
+
+#### Food groups
+
+```{r}
+# All
+asa24.foodgroups.chomp <- 
+     here('data', 'processed', 'ASA24', 
+          '20210405_Food groups, kcal-normalized, all records_chomp.rds') %>% 
+     readRDS()
+
+# Plant only
+asa24.plantgroups.chomp <- 
+     here('data', 'processed', 'ASA24', 
+          '20210405_Plant food groups, kcal-normalized, all records_chomp.rds') %>% 
+     readRDS()
+```
+
+
+### ONR
+
+#### Nutrients
+
+```{r}
+asa24.nut.onr <- 
+     here('data', 'processed', 'ASA24', 
+          '20210405_Nutrients, kcal-normalized, all records_onr.rds') %>% 
+     readRDS()
+```
+
+#### Food groups
+
+```{r}
+# All
+asa24.foodgroups.onr <- 
+     here('data', 'processed', 'ASA24', 
+          '20210405_Food groups, kcal-normalized, all records_onr.rds') %>% 
+     readRDS()
+
+# Plant only
+asa24.plantgroups.onr <- 
+     here('data', 'processed', 'ASA24', 
+          '20210405_Plant food groups, kcal-normalized, all records_onr.rds') %>% 
+     readRDS()
+```
+
 # Prepare
 
 ## trnL
@@ -125,23 +190,20 @@ colnames(asvtab.clr) <- colnames(asvtab)
 
 ## DHQ3
 
-### Concatenate dataframes
+### Tidy
 
 ```{r}
-# DHQ3
+# Concatenate dataframes
 dhq3.nut <- bind_rows(dhq3.nut.chomp, dhq3.nut.onr)
 dhq3.foodgroups <- bind_rows(dhq3.foodgroups.chomp, dhq3.foodgroups.onr)
 dhq3.plantgroups <- bind_rows(dhq3.plantgroups.chomp, dhq3.plantgroups.onr)
-```
 
-```{r}
 # Remove original variables
 rm(list = ls()[grep('.chomp$|.onr$', ls())])
 ```
 
-### Check completeness
-
 ```{r}
+# Check completeness
 any(is.na(dhq3.nut))
 any(is.na(dhq3.foodgroups))
 any(is.na(dhq3.plantgroups))
@@ -168,7 +230,106 @@ any(is.na(dhq3.foodgroups))
 any(is.na(dhq3.plantgroups))
 ```
 
+## ASA24 
+
+### Tidy
+
+```{r}
+# Concatenate dataframes
+asa24.nut <- bind_rows(asa24.nut.chomp, asa24.nut.onr)
+asa24.foodgroups <- bind_rows(asa24.foodgroups.chomp, asa24.foodgroups.onr)
+asa24.plantgroups <- bind_rows(asa24.plantgroups.chomp, asa24.plantgroups.onr)
+
+# Remove original variables
+rm(list = ls()[grep('.chomp$|.onr$', ls())])
+```
+
+```{r}
+# Check completeness
+any(is.na(asa24.nut))
+any(is.na(asa24.foodgroups))
+any(is.na(asa24.plantgroups))
+```
+
+### Average
+
+Create an averaged version where each participants' ASAs are grouped into one.
+
+```{r}
+# Helper function for averaging multiple recalls from the same subject
+average_asa <- function(input){
+     # Assumes rownames are of the format SUBJ_RECALL
+     input %>% 
+     rownames_to_column(var = 'asa') %>% 
+     separate(asa, into = c('subj', 'recall'), sep = '_') %>% 
+     select(-recall) %>% 
+     group_by(subj) %>% 
+     summarize(across(everything(), mean)) %>% 
+     column_to_rownames(var = 'subj')
+}
+```
+
+```{r}
+# Make averaged versions of the data
+asa24.nut.avg <- average_asa(asa24.nut)
+asa24.foodgroups.avg <- average_asa(asa24.foodgroups)
+asa24.plantgroups.avg <- average_asa(asa24.plantgroups)
+```
+
 # Mantel
+
+## ASA24 x DHQ3
+
+### Averaged ASA
+```{r}
+# Subset to shared samples
+shared <- intersect(row.names(asa24.nut.avg),
+                    sample_names(ps.ra.merged))
+
+length(shared)
+```
+
+## Calculate distance
+
+```{r}
+# Within-trnL
+# Euclidean distance on CLR-transformed counts
+dist.trnL <- dist(asvtab.clr[shared, ], method = 'euclidean')
+```
+
+```{r}
+# Within-ASA24
+dist.asa24.nut <- dist(asa24.nut.avg[shared, ], method = 'euclidean')
+dist.asa24.plantgroups <- dist(asa24.plantgroups.avg[shared, ], method = 'euclidean') 
+
+animal <- names(asa24.foodgroups)[!(names(asa24.foodgroups) %in% names(asa24.plantgroups))]
+dist.asa24.animal <- dist(asa24.foodgroups.avg[shared, animal], method = 'euclidean')
+```
+
+#### Run
+
+```{r}
+mantel(dist.asa24.nut, dist.trnL)
+```
+
+```{r}
+mantel(dist.asa24.plantgroups, dist.trnL)
+```
+
+```{r}
+mantel(dist.asa24.animal, dist.trnL)
+```
+
+
+### Paired ASA-stool samples
+
+```{r}
+
+```
+
+## trnL x ASA24
+
+## trnL x DHQ3
 
 ## Match samples 
 ```{r}
@@ -187,7 +348,6 @@ length(shared)
 # Euclidean distance on CLR-transformed counts
 dist.trnL <- dist(asvtab.clr[shared, ], method = 'euclidean')
 ```
-
 
 ### Within-DHQ3
 
