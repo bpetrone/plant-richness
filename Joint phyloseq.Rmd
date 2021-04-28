@@ -22,15 +22,19 @@ library(tidyverse)
 ### CHOMP
 
 ```{r}
-ps.chomp <- 
+ps.chomp.trnL <- 
      here('data', 'processed', 'phyloseq', '20210222_ps_trnL_chomp.rds') %>% 
+     readRDS()
+
+ps.chomp.joint <- 
+     here('data', 'processed', 'phyloseq', '20210428_ps_joint_chomp.rds') %>% 
      readRDS()
 ```
 
 ### ONR
 ```{r}
 ps.onr <- 
-     here('data', 'processed', 'phyloseq', '20210331_ps_trnL_onr.rds') %>% 
+     here('data', 'processed', 'phyloseq', '20210427_ps_trnL_onr.rds') %>% 
      readRDS()
 ```
 
@@ -41,6 +45,13 @@ ps.onr <-
 ### Filter
 
 ```{r}
+# Currently working only with trnL
+# Keep only plant ASVs (the joint object has the metadata we need)
+
+asvs.plant <- taxa_names(ps.chomp.trnL)
+ps.chomp <- prune_taxa(asvs.plant, ps.chomp.joint)
+rm(ps.chomp.trnL, ps.chomp.joint)
+
 # Remove controls
 ps.chomp <- subset_samples(ps.chomp, type == 'sample')
 ```
@@ -54,32 +65,6 @@ ps.chomp <-
     ps.chomp %>% 
     subset_samples(seq_date != '20200304') %>% 
     prune_taxa(taxa_sums(.) > 0, .)
-```
-
-```{r}
-# Remove samples sequenced >1 time
-# Currently, these include a set of WR samples that were sequenced in both December (1 ul input volume, 8 cycles) and February (3 ul input volume, 10 cycles): keep Feb
-
-# Add sample name
-sample_data(ps.chomp)$name <- paste(sample_data(ps.chomp)$subj,
-                                    sample_data(ps.chomp)$CH_week,
-                                    sample_data(ps.chomp)$CH_weekday,
-                                    sep = '_')
-
-# Get list of duplicates
-dups <- sample_data(ps.chomp)$name[duplicated(sample_data(ps.chomp)$name)]
-
-# Remove them and their associated taxa
-ps.chomp <- 
-    ps.chomp %>% 
-    subset_samples(!(name %in% dups & seq_date == '20201201')) %>% 
-    prune_taxa(taxa_sums(.) > 0, .)
-
-# Rename all samples
-sample_names(ps.chomp) <- sample_data(ps.chomp)$name
-
-rm(dups)
-ps.chomp
 ```
 
 ### Synchronize metadata
