@@ -36,7 +36,7 @@ ps.chomp.joint <-
 ### ONR
 ```{r}
 ps.onr <- 
-     here('data', 'processed', 'phyloseq', '20210427_ps_trnL_onr.rds') %>% 
+     here('data', 'processed', 'phyloseq', '20210429_ps_trnL_onr.rds') %>% 
      readRDS()
 ```
 
@@ -46,6 +46,7 @@ ps.onr <-
 
 ### Filter
 
+#### CHOMP
 ```{r}
 # Currently working only with trnL
 # Keep only plant ASVs (the joint object has the metadata we need)
@@ -100,6 +101,8 @@ setdiff(sample_variables(ps.onr), sample_variables(ps.chomp))
 
 ```{r}
 ps <- merge_phyloseq(ps.chomp, ps.onr)
+cat('Expected number of samples', nsamples(ps.onr) + nsamples(ps.chomp), '\n')
+ps
 ```
 
 ### Convert variable types
