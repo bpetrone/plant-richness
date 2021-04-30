@@ -22,10 +22,12 @@ library(tidyverse)
 ### CHOMP
 
 ```{r}
+# Plant only
 ps.chomp.trnL <- 
      here('data', 'processed', 'phyloseq', '20210222_ps_trnL_chomp.rds') %>% 
      readRDS()
 
+# Plant and animal
 ps.chomp.joint <- 
      here('data', 'processed', 'phyloseq', '20210428_ps_joint_chomp.rds') %>% 
      readRDS()
@@ -116,6 +118,8 @@ sample_data(ps)$study <- factor(sample_data(ps)$study)
 
 ```{r}
 saveRDS(ps, here('data', 'processed', 'phyloseq',
-                 '20210408_ps_trnL.rds'))
+                 '20210428_ps_trnL.rds'))
+
+# 20210428: Now with study_date in metadata
 ```
 
