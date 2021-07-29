@@ -1,0 +1,142 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+---
+title: "Figure 1"
+output: html_notebook
+---
+
+# Setup
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r, include=FALSE, echo=FALSE}
+library(here)
+library(phyloseq)
+library(metacoder)
+library(tidyverse)
+library(vegan)
+```
+
+# Read in data
+
+## trnL
+
+```{r}
+# Read in last saved phyloseqs
+outdir <- here('data', 'processed', 'miniseq', 'combined')
+ps <- readRDS(file.path(outdir, '20210714_ps.rds'))
+
+rm(outdir)
+```
+
+## Filter
+
+### Foods only
+
+```{r}
+# Make a foods-only object
+ps
+ps.foods <- subset_taxa(ps, !is.na(kingdom))
+ps.foods
+```
+
+
+```{r}
+# Update read counts in phyloseq object
+sample_data(ps.foods)$reads <- sample_sums(ps.foods)
+```
+
+```{r}
+# What percentage of reads does this retain (overall)?
+sum(sample_sums(ps.foods))/sum(sample_sums(ps))
+```
+
+```{r}
+# What percentage of reads does this retain (per sample)?
+(sample_sums(ps.foods)/sample_sums(ps)) %>% 
+     data.frame(percentage = . ) %>% 
+     ggplot(., aes(x = percentage)) +
+     geom_histogram(binwidth = 0.05, boundary = 0) +
+     theme_bw()
+```
+
+Follow up on samples that have <90% of their reads preserved after removing those not identified to plant.
+
+```{r}
+(sample_sums(ps.foods)/sample_sums(ps)) %>% 
+     data.frame(percentage = . ) %>% 
+     filter(is.na(percentage) | percentage < 0.9)
+```
+
+```{r}
+# Remove samples that now have no reads
+ps.foods <- 
+     ps.foods %>% 
+     prune_samples(sample_sums(.) > 0, .) %>% 
+     prune_taxa(taxa_sums(.) > 0, .)
+```
+
+# Visualize taxa
+
+## Metacoder tree
+
+```{r}
+# Add lowest level information
+taxtab <- 
+     data.frame(ps.foods@tax_table) %>% 
+     lowest_level()
+```
+
+```{r}
+# Convert phyloseq object to taxmap
+x <- parse_phyloseq(ps.foods)
+```
+
+```{r}
+x
+```
+
+Helpful functions for accessing data
+```{r}
+taxon_names(x) %>% head() # Taxa names
+taxon_ranks(x) %>% head() # Taxa ranks
+```
+
+```{r}
+# Convert counts to presence-absence
+x$data$otu_table <- 
+     counts_to_presence(x,
+                        data = 'otu_table', 
+                        cols = x$data$sample_data$sample_id)
+
+# Returned logical; convert to numeric
+x$data$otu_table <- 
+     x$data$otu_table %>% 
+     mutate_at(vars(-taxon_id), as.numeric)
+
+# Calculate taxon abundance in this presence-absence scheme
+# Not sure how this is working
+x$data$taxon_counts <- 
+     x$data$otu_table %>% 
+     column_to_rownames(var = 'taxon_id') %>% 
+     rowSums()
+
+x$data$taxon_counts$total <- 
+     rowSums(x$data$taxon_counts[, -1]) # -1 = taxon_id column
+```
+
+```{r}
+# Plot heat tree based on presence-absence data
+x %>% 
+     heat_tree(node_size = n_obs,
+               node_size_axis_label = "Number of ASVs",
+               node_color = total,
+               node_label = taxon_names)
+```
+
