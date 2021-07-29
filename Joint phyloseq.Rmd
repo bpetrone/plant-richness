@@ -11,6 +11,7 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 
 ```{r libraries, include=FALSE, echo=FALSE}
 library(here)
+library(MButils) # for lowest_level naming
 library(phyloseq)
 library(tidyverse)
 ```
@@ -22,107 +23,122 @@ library(tidyverse)
 ### CHOMP
 
 ```{r}
-# Plant only
-ps.chomp.trnL <- 
-     here('data', 'processed', 'phyloseq', '20210222_ps_trnL_chomp.rds') %>% 
+ps.chomp <- 
+     here('data', 'processed', 'phyloseq', '20210714_ps_trnL_CHOMP.rds') %>% 
      readRDS()
 
-# Plant and animal
-ps.chomp.joint <- 
-     here('data', 'processed', 'phyloseq', '20210428_ps_joint_chomp.rds') %>% 
-     readRDS()
+ps.chomp
 ```
 
 ### ONR
+
 ```{r}
 ps.onr <- 
-     here('data', 'processed', 'phyloseq', '20210429_ps_trnL_onr.rds') %>% 
+     here('data', 'processed', 'phyloseq', '20210617_ps_trnL_ONR.rds') %>% 
      readRDS()
+
+ps.onr
 ```
 
-# Pre-process data
+### DFC
 
-## trnL
-
-### Filter
-
-#### CHOMP
 ```{r}
-# Currently working only with trnL
-# Keep only plant ASVs (the joint object has the metadata we need)
+ps.dfc <- 
+     here('data', 'processed', 'phyloseq', '20210623_ps_trnL_DFC.rds') %>% 
+     readRDS()
 
-asvs.plant <- taxa_names(ps.chomp.trnL)
-ps.chomp <- prune_taxa(asvs.plant, ps.chomp.joint)
-rm(ps.chomp.trnL, ps.chomp.joint)
-
-# Remove controls
-ps.chomp <- subset_samples(ps.chomp, type == 'sample')
+ps.dfc
 ```
 
-CHOMP phyloseq object contains Wednesday and Thursday samples sequenced on two separate runs; keep only the second of these (February 2021). 
+### POMMS
 
 ```{r}
-# Select only MiniSeq experiments of interest:
-# Substituted Feb 2021 run in place of Mar 2020
-ps.chomp <- 
-    ps.chomp %>% 
-    subset_samples(seq_date != '20200304') %>% 
-    prune_taxa(taxa_sums(.) > 0, .)
+ps.pomms <- 
+     here('data', 'processed', 'phyloseq', '20210612_ps_trnL_POMMS.rds') %>% 
+     readRDS()
+
+ps.pomms
 ```
 
-### Synchronize metadata
+### Tidy
+
+#### Reduce sample data
+
+To begin with, let's consider only study and other broad metadata variables:
+* Age (pediatric/adolescent/adult)
+* Diet (free-eating/weight loss/controlled feeding)
 
 ```{r}
-# Add study column for each
+# Populate all study variables
+# (Tried to do before loading, but names not consistent, and ONR has some NAs)
+
 sample_data(ps.chomp)$study <- 'CHOMP'
+sample_data(ps.dfc)$study <- 'DFC'
 sample_data(ps.onr)$study <- 'ONR'
+sample_data(ps.pomms)$study <- 'POMMS'
 ```
 
 ```{r}
-intersect(sample_variables(ps.chomp), sample_variables(ps.onr))
+# Add demographics, as above
+# Age
+sample_data(ps.chomp)$age <- 'Adult'
+sample_data(ps.dfc)$age <- 'Adult'
+sample_data(ps.onr)$age <- 'Adult'
+sample_data(ps.pomms)$age <- 'Adolescent'
+
+# Diet
+sample_data(ps.chomp)$diet <- 'Free-eating'
+sample_data(ps.dfc)$diet <- 'Weight loss'
+sample_data(ps.onr)$diet <- 'Free-eating'
+sample_data(ps.pomms)$diet <- 'Free-eating'
 ```
 
-```{r}
-# In CHOMP, but not in ONR
-setdiff(sample_variables(ps.chomp), sample_variables(ps.onr))
-```
+#### Unique sample names
 
 ```{r}
-# In ONR, but not in CHOMP
-setdiff(sample_variables(ps.onr), sample_variables(ps.chomp))
-```
+# Otherwise, with well-based labeling, some might be combined in merge
+sample_names(ps.chomp) <- paste(sample_data(ps.chomp)$study, 
+                              seq(nsamples(ps.chomp)), sep = '-')
 
-```{r}
-# Reconcile differences thoughtfully :P
-# TODO
+sample_names(ps.dfc) <- paste(sample_data(ps.dfc)$study, 
+                              seq(nsamples(ps.dfc)), sep = '-')
+
+sample_names(ps.onr) <- paste(sample_data(ps.onr)$study, 
+                              seq(nsamples(ps.onr)), sep = '-')
+
+sample_names(ps.pomms) <- paste(sample_data(ps.pomms)$study, 
+                              seq(nsamples(ps.pomms)), sep = '-')
 ```
 
 ### Merge
 
+Note that initially when I did this merge I had 1035 samples, and now I have 20 more.  I think this is due to the fact that I now preserve samples with 0 reads in the phyloseq objects, even if they fell out earlier in the pipeline.
+
 ```{r}
-ps <- merge_phyloseq(ps.chomp, ps.onr)
-cat('Expected number of samples', nsamples(ps.onr) + nsamples(ps.chomp), '\n')
+ps <- merge_phyloseq(ps.chomp, ps.dfc, ps.onr, ps.pomms)
 ps
 ```
 
-### Convert variable types
-
-Weird, couldn't figure out how to do dates prior to merge_phyloseq step; was getting an error that origin wasn't specified, though I thought I had when initializing both objects.
-
 ```{r}
-# Date type
-sample_data(ps)$seq_date <- 
-     as.Date(as.character(sample_data(ps)$seq_date),
-             format = '%Y%m%d', origin = '1900-01-01')
+# Adjust sample variables en masse for subsequent plots
+sample_data(ps)$diet <- factor(sample_data(ps)$diet, 
+                               levels = c('Free-eating', 'Weight loss'))
 
-# Factor type
-sample_data(ps)$study <- factor(sample_data(ps)$study)
+sample_data(ps)$reads <- sample_sums(ps)
+
+sample_data(ps)$reads_binned <- cut(sample_data(ps)$reads, 
+                                    breaks = c(-1, 1001, 5001, 10001, 30001,
+                                               max(sample_data(ps)$reads) + 1), 
+                                    labels = c('<1,000 reads', '1,000-5,000', 
+                                               '5,000-10,000', '10,000-30,000',
+                                               '>30,000'))
 ```
 
-```{r}
-saveRDS(ps, here('data', 'processed', 'phyloseq',
-                 '20210428_ps_trnL.rds'))
+### Save
 
-# 20210428: Now with study_date in metadata
+```{r}
+# saveRDS(ps,
+#         here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds'))
 ```
+
 
