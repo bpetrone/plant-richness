@@ -1,10 +1,5 @@
 ---
-title: "R Notebook"
-output: html_notebook
----
-
----
-title: "Figure 1"
+title: "Figure 1A"
 output: html_notebook
 ---
 
@@ -26,60 +21,14 @@ library(vegan)
 # Read in data
 
 ## trnL
-
+Note this is already trimmed to only those taxa identified to a food species, with duplicated taxa collapsed.
 ```{r}
 # Read in last saved phyloseqs
-outdir <- here('data', 'processed', 'miniseq', 'combined')
-ps <- readRDS(file.path(outdir, '20210714_ps.rds'))
+ps <- 
+     here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds') %>% 
+     readRDS()
 
-rm(outdir)
-```
-
-## Filter
-
-### Foods only
-
-```{r}
-# Make a foods-only object
 ps
-ps.foods <- subset_taxa(ps, !is.na(kingdom))
-ps.foods
-```
-
-
-```{r}
-# Update read counts in phyloseq object
-sample_data(ps.foods)$reads <- sample_sums(ps.foods)
-```
-
-```{r}
-# What percentage of reads does this retain (overall)?
-sum(sample_sums(ps.foods))/sum(sample_sums(ps))
-```
-
-```{r}
-# What percentage of reads does this retain (per sample)?
-(sample_sums(ps.foods)/sample_sums(ps)) %>% 
-     data.frame(percentage = . ) %>% 
-     ggplot(., aes(x = percentage)) +
-     geom_histogram(binwidth = 0.05, boundary = 0) +
-     theme_bw()
-```
-
-Follow up on samples that have <90% of their reads preserved after removing those not identified to plant.
-
-```{r}
-(sample_sums(ps.foods)/sample_sums(ps)) %>% 
-     data.frame(percentage = . ) %>% 
-     filter(is.na(percentage) | percentage < 0.9)
-```
-
-```{r}
-# Remove samples that now have no reads
-ps.foods <- 
-     ps.foods %>% 
-     prune_samples(sample_sums(.) > 0, .) %>% 
-     prune_taxa(taxa_sums(.) > 0, .)
 ```
 
 # Visualize taxa
@@ -87,19 +36,8 @@ ps.foods <-
 ## Metacoder tree
 
 ```{r}
-# Add lowest level information
-taxtab <- 
-     data.frame(ps.foods@tax_table) %>% 
-     lowest_level()
-```
-
-```{r}
 # Convert phyloseq object to taxmap
-x <- parse_phyloseq(ps.foods)
-```
-
-```{r}
-x
+x <- parse_phyloseq(ps)
 ```
 
 Helpful functions for accessing data
@@ -108,35 +46,46 @@ taxon_names(x) %>% head() # Taxa names
 taxon_ranks(x) %>% head() # Taxa ranks
 ```
 
+377 taxa, and 117 terminal nodes
+Okay!  So calc_taxon_abund converts "per-observation counts (e.g. OTU counts) to per-taxon counts", where the per-taxon counts span the full tree
 ```{r}
-# Convert counts to presence-absence
-x$data$otu_table <- 
-     counts_to_presence(x,
-                        data = 'otu_table', 
-                        cols = x$data$sample_data$sample_id)
+# Following tutorial https://github.com/grunwaldlab/metacoder/issues/267: 
+# 1. calc_taxon_abund
+# 2. counts_to_presence
 
-# Returned logical; convert to numeric
-x$data$otu_table <- 
-     x$data$otu_table %>% 
-     mutate_at(vars(-taxon_id), as.numeric)
+x$data$tax_abund <- calc_taxon_abund(x, 'otu_table')
 
-# Calculate taxon abundance in this presence-absence scheme
-# Not sure how this is working
-x$data$taxon_counts <- 
-     x$data$otu_table %>% 
-     column_to_rownames(var = 'taxon_id') %>% 
-     rowSums()
+dim(x$data$tax_abund)
 
-x$data$taxon_counts$total <- 
-     rowSums(x$data$taxon_counts[, -1]) # -1 = taxon_id column
+# Convert to presence-absence
+x$data$tax_abund <- counts_to_presence(x, 'tax_abund')
+x$data$tax_abund
+```
+```{r}
+# Convert to numeric, in order to...
+x$data$tax_abund <- 
+     x$data$tax_abund %>% 
+     mutate(across(-taxon_id, as.numeric))
+
+# ...total counts per taxon in this presence-absence scheme
+x$data$tax_occ <- 
+     calc_n_samples(x, 'tax_abund')
 ```
 
 ```{r}
 # Plot heat tree based on presence-absence data
-x %>% 
-     heat_tree(node_size = n_obs,
-               node_size_axis_label = "Number of ASVs",
-               node_color = total,
-               node_label = taxon_names)
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+gradient <- brewer.pal(9, 'YlGn')
+
+heat_tree(
+     x,
+     node_label = taxon_names,
+     node_size = n_samples,
+     node_color = n_samples,
+     node_color_range = c(first(gradient), last(gradient)),
+     output_file = here('results', 'manuscript', '1', 
+          paste0(plotID, '_A_n samples detected, size and color.pdf'))
+)
 ```
 
