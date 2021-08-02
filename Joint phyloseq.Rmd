@@ -134,6 +134,79 @@ sample_data(ps)$reads_binned <- cut(sample_data(ps)$reads,
                                                '>30,000'))
 ```
 
+Note-- also might be interesting to try this ordination not just on ASVs identified to a food. Because of two features:
+* ASVs not identified make up the minority of the total reads in the dataset, so they shouldn't affect the ordination much (at least not for PCA on CLR-transformed counts)
+* However, ASVs that do map to a food, but aren't yet labeled as such, will be shared across cohorts and contribute meaningfully to the ordination, which is what will ultimately happen when I label them.
+
+So I think reasonable to at least try an ordination on the full dataset (~1000 ASVs) for comparison to the one on the food-only dataset (~10% of that number). 
+
+### Filter
+
+#### Read counts
+
+```{r}
+# Remove samples with 0 read counts
+ps <- prune_samples(sample_sums(ps) > 0, ps)
+ps
+```
+
+#### Plant taxa
+
+Here, decide whether to proceed with the data as-is (all identified SVs), or analyze only those labeled to a food species.
+
+##### Foods only
+
+What percentage of reads in the dataset are labeled with a food taxon name?
+
+```{r}
+taxtab <- data.frame(ps@tax_table)
+asvtab <- data.frame(ps@otu_table)
+
+unassigned <- 
+     taxtab %>% 
+     filter(is.na(superkingdom)) %>% 
+     row.names()
+
+sum(asvtab[, unassigned])/sum(asvtab)
+```
+
+```{r}
+# Consider foods only
+ps <- subset_taxa(ps, !is.na(superkingdom))
+ps
+```
+
+After this step, need to check again for samples with 0 read counts, as their only reads may have been unlabeled.
+```{r}
+# Remove samples with 0 read counts
+ps <- prune_samples(sample_sums(ps) > 0, ps)
+ps
+```
+
+##### Glom names
+
+```{r}
+taxtab <- 
+     data.frame(ps@tax_table) %>% 
+     lowest_level() # Get lowest named level
+```
+
+```{r}
+# How many duplicates?
+taxtab$name[duplicated(taxtab$name)]
+```
+
+This is a bit fraught at higher levels, because depending on exact ASVs these families may actually map to different species.  Ideally go back and do this by exact ASV identity, but for now, try merging everything.
+
+```{r}
+# Replace taxonomy table in phyloseq object
+tax_table(ps) <- as.matrix(taxtab)
+
+# Glom at this new level
+ps <- tax_glom(ps, taxrank = 'name')
+ps
+```
+
 ### Save
 
 ```{r}
@@ -141,4 +214,11 @@ sample_data(ps)$reads_binned <- cut(sample_data(ps)$reads,
 #         here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds'))
 ```
 
+```{r}
+# Load last saved phyloseq
+ps <-
+     here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds') %>%
+     readRDS()
 
+ps
+```
