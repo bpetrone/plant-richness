@@ -1,0 +1,389 @@
+---
+title: "Alpha diversity"
+output: html_notebook
+---
+
+# Setup
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r, include=FALSE, echo=FALSE}
+library(here)
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+```
+
+# Read in data
+
+## trnL
+
+```{r}
+# Read in last saved phyloseqs
+outdir <- here('data', 'processed', 'miniseq', 'combined')
+ps <- readRDS(file.path(outdir, '20210714_ps.rds'))
+
+rm(outdir)
+```
+
+## Diet surveys
+
+### DHQ3
+
+```{r}
+ffq <- read_csv(here('data', 'processed', 'DHQ3', 
+                     'Full dataset with CHOMP IDs.csv'))
+head(ffq)
+```
+Pull subject ID and any columns relevant to HEI.
+
+```{r}
+ffq <- select(ffq, 
+              subj, 
+              age = Age,
+              sex = `Sex (1=male; 2=female)`, 
+              matches('HEI'))
+names(ffq)
+```
+
+I am assuming here that total vegetables, total fruits, and total whole grains are non-overlapping and include the other listed plant categories, but I am not certain. 
+Tally these up independently, and also tally all plant categories for comparison.
+
+```{r}
+ffq <- 
+     ffq %>% 
+     rename(hei_tot = 'Total HEI-2015 Score',
+            hei_veg = 'HEI-2015 - Total Vegetables - Component Score',
+            hei_greensbeans = 'HEI-2015 - Greens and Beans - Component Score',
+            hei_fruit = 'HEI-2015 - Total Fruits - Component Score',
+            hei_wholefruits = 'HEI-2015 - Whole Fruits - Component Score',
+            hei_grain = 'HEI-2015 - Whole Grains - Component Score') %>% 
+     # Make custom plant column
+     mutate(hei_plant_uniq = hei_veg + hei_fruit + hei_grain,
+            hei_plant_all = hei_veg + hei_greensbeans + hei_fruit + 
+                 hei_wholefruits + hei_grain)
+
+ffq
+```
+
+## Filter
+
+### Foods only
+
+```{r}
+# Make a foods-only object
+ps
+ps.foods <- subset_taxa(ps, !is.na(kingdom))
+ps.foods
+```
+
+
+```{r}
+# Update read counts in phyloseq object
+sample_data(ps.foods)$reads <- sample_sums(ps.foods)
+```
+
+```{r}
+# What percentage of reads does this retain (overall)?
+sum(sample_sums(ps.foods))/sum(sample_sums(ps))
+```
+
+```{r}
+# What percentage of reads does this retain (per sample)?
+(sample_sums(ps.foods)/sample_sums(ps)) %>% 
+     data.frame(percentage = . ) %>% 
+     ggplot(., aes(x = percentage)) +
+     geom_histogram(binwidth = 0.05, boundary = 0) +
+     theme_bw()
+```
+
+Follow up on samples that have <90% of their reads preserved after removing those not identified to plant.
+
+```{r}
+(sample_sums(ps.foods)/sample_sums(ps)) %>% 
+     data.frame(percentage = . ) %>% 
+     filter(is.na(percentage) | percentage < 0.9)
+```
+
+```{r}
+# Remove samples that now have no reads
+ps.foods <- 
+     ps.foods %>% 
+     prune_samples(sample_sums(.) > 0, .) %>% 
+     prune_taxa(taxa_sums(.) > 0, .)
+```
+
+# Alpha diversity (trnL)
+
+```{r}
+alpha <- 
+     estimate_richness(ps.foods, measures = c('Observed', 'Shannon')) %>% 
+     # Clean up formatting
+     rownames_to_column(var = 'name')
+
+alpha
+```
+
+```{r}
+# Join to read counts
+samdf <- 
+     data.frame(ps.foods@sam_data)
+
+alpha <- 
+     samdf %>% 
+     select(name, reads, subj) %>% 
+     right_join(alpha)
+
+alpha
+```
+
+### vs. read counts
+
+```{r}
+alpha.long <- pivot_longer(alpha, cols = c(Observed, Shannon), 
+                           names_to = 'measure', values_to = 'value')
+```
+
+```{r}
+ggplot(alpha.long, aes(x = reads, y = value)) +
+     geom_point() +
+     labs(x = 'Read depth', y = 'Alpha diversity') +
+     facet_wrap(~measure, scales = 'free_y') +
+     theme_bw()
+```
+
+## Rarefaction
+
+```{r}
+# Pick a read count threshold
+thresh <- 10000
+```
+
+```{r}
+# Remove samples with counts below that threshold, and get ASV table
+asvtab <- 
+     ps.foods %>% 
+     subset_samples(reads >= thresh) %>% 
+     prune_taxa(taxa_sums(.) > 0, .) %>% 
+     otu_table(.)
+
+asvtab <- asvtab@.Data
+```
+
+```{r}
+raremin <- 
+     asvtab %>% 
+     rowSums() %>% 
+     min()
+
+raremin # The lowest read depth in the filtered data
+```
+
+```{r}
+asvtab.rare <- rarefy(asvtab, raremin)
+head(asvtab.rare) # The expected number of species if only raremin reads
+```
+
+```{r}
+# View curves
+rarecurve(asvtab[1:20, ], col = "blue")
+```
+
+```{r}
+# How does this compare to actual number passed to analysis below?
+rarefaction.df <- 
+     data.frame(obs_rare = asvtab.rare) %>% 
+     rownames_to_column(var = 'name')
+
+# Add actual # observed taxa
+rarefaction.df <- 
+     rowSums(asvtab > 0) %>% 
+     data.frame(obs = .) %>% 
+     rownames_to_column(var = 'name') %>% 
+     full_join(rarefaction.df)
+
+# Add 
+```
+
+```{r}
+ggplot(rarefaction.df, aes(x = obs, y = obs_rare)) +
+     geom_point() +
+     coord_equal()
+```
+
+## By subject 
+
+```{r}
+# How well do observed and Shannon correlate with one another?
+ggplot(alpha, aes(Observed, Shannon)) +
+     geom_point() +
+     coord_fixed(ratio = max(alpha$Observed)/max(alpha$Shannon))
+```
+
+```{r}
+cor.test(alpha$Shannon, alpha$Observed, 
+         alternative = 'greater',
+         method = 'pearson')
+```
+
+
+```{r}
+# Refactor subject IDs in order of descending median taxa observations
+alpha.stats <- 
+     alpha %>% 
+     group_by(subj) %>% 
+     summarize(med = median(Observed), sd = sd(Observed)) %>% 
+     arrange(desc(med))
+
+alpha$subj <- factor(alpha$subj, levels = alpha.stats$subj)
+
+ggplot(alpha, aes(x = subj, y = Observed)) +
+     geom_boxplot() +
+     labs(x = 'Participant') +
+     theme_bw() +
+     theme(
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(), 
+          panel.grid.major.x = element_blank()
+     )
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 'miniseq', 'Combined', 'alpha diversity',
+            paste0(plotID, '_Alpha diversity by subject, raw.pdf')),
+       height = 3, width = 5)
+```
+
+```{r}
+# Factor by largest standard deviation instead
+```
+
+
+
+How does this change with filtering out of low quality samples?
+What about at different phylogenetic levels?
+
+# Dietary diversity (FFQ)
+
+Average alpha diversity results within each participant, and join to FFQ data.
+
+```{r}
+ffq <- 
+     alpha.long %>% 
+     group_by(subj, measure) %>% 
+     summarize(mean = mean(value), sd = sd(value)) %>% 
+     left_join(ffq)
+
+ffq
+```
+
+## vs. total HEI score
+```{r}
+ggplot(ffq, aes(x = mean, y = hei_tot)) +
+     geom_point() +
+     facet_wrap(~measure, scales = 'free_x')
+```
+
+```{r}
+ffq.wide <- 
+     ffq %>% 
+     select(-sd) %>% 
+     pivot_wider(names_from = measure, values_from = mean)
+
+ffq.wide
+```
+```{r}
+cor.test(ffq.wide$Observed, ffq.wide$hei_tot,
+         alternative = 'two.sided',
+         method = 'pearson')
+```
+
+```{r}
+cor.test(ffq.wide$Shannon, ffq.wide$hei_tot,
+         alternative = 'two.sided',
+         method = 'pearson')
+```
+
+## vs. plant-components of HEI score
+
+### Non-redundant
+```{r}
+ggplot(ffq, aes(x = mean, y = hei_plant_uniq)) +
+     geom_point() +
+     facet_wrap(~measure, scales = 'free_x')
+```
+
+```{r}
+cor.test(ffq.wide$Observed, ffq.wide$hei_plant_uniq,
+         alternative = 'greater',
+         method = 'spearman')
+```
+
+```{r}
+cor.test(ffq.wide$Shannon, ffq.wide$hei_plant_uniq,
+         alternative = 'greater',
+         method = 'spearman')
+```
+
+### All
+
+```{r}
+ggplot(ffq, aes(x = mean, y = hei_plant_all)) +
+     geom_point() +
+     facet_wrap(~measure, scales = 'free_x') +
+     labs(x = 'Alpha diversity value by metabarcoding',
+          y = 'HEI-2015 plant components score') +
+     theme_bw()
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results', 'miniseq', 'Combined', 'alpha diversity',
+#             paste0(plotID, '_HEI-2015, all plant categories.png')),
+#        height = 3, width = 5)
+```
+
+```{r}
+cor.test(ffq.wide$Observed, ffq.wide$hei_plant_all,
+         alternative = 'greater',
+         method = 'spearman')
+```
+
+```{r}
+cor.test(ffq.wide$Shannon, ffq.wide$hei_plant_all,
+         alternative = 'greater',
+         method = 'spearman')
+```
+
+## vs. demographics
+
+### Age
+```{r}
+ggplot(ffq, aes(x = age, y = mean)) +
+     geom_point() +
+     facet_wrap(~measure, scales = 'free_y')
+```
+
+```{r}
+summary(lm(Observed ~ age, ffq.wide))
+```
+
+### Sex
+
+```{r}
+ggplot(ffq, aes(x = sex, y = mean, by = sex, group = sex)) +
+     geom_boxplot() + 
+     facet_wrap(~measure, scales = 'free_y')
+```
+
+```{r}
+men <- ffq.wide$Shannon[ffq.wide$sex == 1]
+women <- ffq.wide$Shannon[ffq.wide$sex == 2]
+
+t.test(men, women)
+```
+
