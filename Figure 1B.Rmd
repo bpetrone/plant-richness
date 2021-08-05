@@ -20,109 +20,24 @@ library(vegan)
 # Read in data
 
 ## trnL
-
+Note this is already trimmed to only those taxa identified to a food species, with duplicated taxa collapsed.
 ```{r}
 # Read in last saved phyloseqs
-outdir <- here('data', 'processed', 'miniseq', 'combined')
-ps <- readRDS(file.path(outdir, '20210714_ps.rds'))
+ps <- 
+     here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds') %>% 
+     readRDS()
 
-rm(outdir)
-```
-
-## Diet surveys
-
-### DHQ3
-
-```{r}
-ffq <- read_csv(here('data', 'processed', 'DHQ3', 
-                     'Full dataset with CHOMP IDs.csv'))
-head(ffq)
-```
-Pull subject ID and any columns relevant to HEI.
-
-```{r}
-ffq <- select(ffq, 
-              subj, 
-              age = Age,
-              sex = `Sex (1=male; 2=female)`, 
-              matches('HEI'))
-names(ffq)
-```
-
-I am assuming here that total vegetables, total fruits, and total whole grains are non-overlapping and include the other listed plant categories, but I am not certain. 
-Tally these up independently, and also tally all plant categories for comparison.
-
-```{r}
-ffq <- 
-     ffq %>% 
-     rename(hei_tot = 'Total HEI-2015 Score',
-            hei_veg = 'HEI-2015 - Total Vegetables - Component Score',
-            hei_greensbeans = 'HEI-2015 - Greens and Beans - Component Score',
-            hei_fruit = 'HEI-2015 - Total Fruits - Component Score',
-            hei_wholefruits = 'HEI-2015 - Whole Fruits - Component Score',
-            hei_grain = 'HEI-2015 - Whole Grains - Component Score') %>% 
-     # Make custom plant column
-     mutate(hei_plant_uniq = hei_veg + hei_fruit + hei_grain,
-            hei_plant_all = hei_veg + hei_greensbeans + hei_fruit + 
-                 hei_wholefruits + hei_grain)
-
-ffq
-```
-
-## Filter
-
-### Foods only
-
-```{r}
-# Make a foods-only object
 ps
-ps.foods <- subset_taxa(ps, !is.na(kingdom))
-ps.foods
 ```
 
-
-```{r}
-# Update read counts in phyloseq object
-sample_data(ps.foods)$reads <- sample_sums(ps.foods)
-```
-
-```{r}
-# What percentage of reads does this retain (overall)?
-sum(sample_sums(ps.foods))/sum(sample_sums(ps))
-```
-
-```{r}
-# What percentage of reads does this retain (per sample)?
-(sample_sums(ps.foods)/sample_sums(ps)) %>% 
-     data.frame(percentage = . ) %>% 
-     ggplot(., aes(x = percentage)) +
-     geom_histogram(binwidth = 0.05, boundary = 0) +
-     theme_bw()
-```
-
-Follow up on samples that have <90% of their reads preserved after removing those not identified to plant.
-
-```{r}
-(sample_sums(ps.foods)/sample_sums(ps)) %>% 
-     data.frame(percentage = . ) %>% 
-     filter(is.na(percentage) | percentage < 0.9)
-```
-
-```{r}
-# Remove samples that now have no reads
-ps.foods <- 
-     ps.foods %>% 
-     prune_samples(sample_sums(.) > 0, .) %>% 
-     prune_taxa(taxa_sums(.) > 0, .)
-```
-
-# Alpha diversity (trnL)
+# Alpha diversity
 
 ```{r}
 alpha <- 
-     estimate_richness(ps.foods, measures = c('Observed', 'Shannon')) %>% 
+     estimate_richness(ps, measures = c('Observed', 'Shannon')) %>% 
      # Clean up formatting
-     rownames_to_column(var = 'name')
+     rownames_to_column(var = 'name') %>% 
+     mutate(name = gsub('\\.', '-', name))
 
 alpha
 ```
@@ -130,16 +45,17 @@ alpha
 ```{r}
 # Join to read counts
 samdf <- 
-     data.frame(ps.foods@sam_data)
+     data.frame(ps@sam_data) %>% 
+     select(-name) %>% # SUBJ_WEEK_DATE format, incomplete across cohorts
+     rownames_to_column(var = 'name')
 
 alpha <- 
      samdf %>% 
-     select(name, reads, subj) %>% 
+     select(name, study, subj, reads) %>% 
      right_join(alpha)
 
 alpha
 ```
-
 ### vs. read counts
 
 ```{r}
@@ -159,18 +75,19 @@ ggplot(alpha.long, aes(x = reads, y = value)) +
 
 ```{r}
 # Pick a read count threshold
-thresh <- 10000
+thresh <- 1
 ```
 
 ```{r}
 # Remove samples with counts below that threshold, and get ASV table
 asvtab <- 
-     ps.foods %>% 
-     subset_samples(reads >= thresh) %>% 
+     ps %>% 
+     subset_samples(reads_food >= thresh) %>% 
      prune_taxa(taxa_sums(.) > 0, .) %>% 
      otu_table(.)
 
 asvtab <- asvtab@.Data
+dim(asvtab)
 ```
 
 ```{r}
@@ -189,8 +106,44 @@ head(asvtab.rare) # The expected number of species if only raremin reads
 
 ```{r}
 # View curves
+# Randomly choose 20 CHOMP rows
 rarecurve(asvtab[1:20, ], col = "blue")
 ```
+
+More important than the curves may be conclusions we can draw from the slope: `rareslope` calculates the slope of `rarecurve` at `sample` size (can be a vector).
+```{r}
+slopes <- rareslope(asvtab, seq(100, 20000, 100))
+```
+
+```{r}
+slopes.long <- 
+     slopes %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'row') %>% 
+     pivot_longer(cols = -row,
+                  names_to = 'sample',
+                  values_to = 'slope') %>% 
+     mutate(sample = as.numeric(gsub('N', '', sample)),
+            study = gsub('-\\d+$', '', row))
+
+slopes.long
+```
+
+```{r}
+ggplot(slopes.long, aes(x = sample, y = slope, group = sample)) +
+     geom_point() 
+```
+
+```{r}
+means <- colSums(slopes)/dim(slopes)[1]
+```
+
+```{r}
+# What does slope *mean*? For each additional read, we see that many additional species in the sample. Taking the inverse asks: How many reads do we need to see one additional species?
+1/means
+```
+
+Ok, so let's consider then a 5000-read threshold, which would mean we'd need 14,626 additional reads to get one more species. Could perhaps go even lower based on inflection point of graph above.
 
 ```{r}
 # How does this compare to actual number passed to analysis below?
@@ -229,7 +182,6 @@ cor.test(alpha$Shannon, alpha$Observed,
          method = 'pearson')
 ```
 
-
 ```{r}
 # Refactor subject IDs in order of descending median taxa observations
 alpha.stats <- 
@@ -242,6 +194,7 @@ alpha$subj <- factor(alpha$subj, levels = alpha.stats$subj)
 
 ggplot(alpha, aes(x = subj, y = Observed)) +
      geom_boxplot() +
+     facet_wrap(~study, scales = 'free_x') +
      labs(x = 'Participant') +
      theme_bw() +
      theme(
@@ -254,9 +207,26 @@ ggplot(alpha, aes(x = subj, y = Observed)) +
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results', 'miniseq', 'Combined', 'alpha diversity',
-            paste0(plotID, '_Alpha diversity by subject, raw.pdf')),
+            paste0(plotID, '_Alpha diversity by study, raw.pdf')),
        height = 3, width = 5)
 ```
+
+```{r}
+alpha %>% 
+     filter(study %in% c('CHOMP', 'ONR')) %>% 
+     # filter(reads > 10000) %>% 
+     ggplot(aes(x = subj, y = Observed, fill = study)) +
+     geom_boxplot() +
+     # facet_wrap(~study, scales = 'free_x') +
+     labs(x = 'Participant') +
+     theme_bw() +
+     theme(
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(), 
+          panel.grid.major.x = element_blank()
+     )
+```
+
 
 ```{r}
 # Factor by largest standard deviation instead
@@ -266,124 +236,4 @@ ggsave(here('results', 'miniseq', 'Combined', 'alpha diversity',
 
 How does this change with filtering out of low quality samples?
 What about at different phylogenetic levels?
-
-# Dietary diversity (FFQ)
-
-Average alpha diversity results within each participant, and join to FFQ data.
-
-```{r}
-ffq <- 
-     alpha.long %>% 
-     group_by(subj, measure) %>% 
-     summarize(mean = mean(value), sd = sd(value)) %>% 
-     left_join(ffq)
-
-ffq
-```
-
-## vs. total HEI score
-```{r}
-ggplot(ffq, aes(x = mean, y = hei_tot)) +
-     geom_point() +
-     facet_wrap(~measure, scales = 'free_x')
-```
-
-```{r}
-ffq.wide <- 
-     ffq %>% 
-     select(-sd) %>% 
-     pivot_wider(names_from = measure, values_from = mean)
-
-ffq.wide
-```
-```{r}
-cor.test(ffq.wide$Observed, ffq.wide$hei_tot,
-         alternative = 'two.sided',
-         method = 'pearson')
-```
-
-```{r}
-cor.test(ffq.wide$Shannon, ffq.wide$hei_tot,
-         alternative = 'two.sided',
-         method = 'pearson')
-```
-
-## vs. plant-components of HEI score
-
-### Non-redundant
-```{r}
-ggplot(ffq, aes(x = mean, y = hei_plant_uniq)) +
-     geom_point() +
-     facet_wrap(~measure, scales = 'free_x')
-```
-
-```{r}
-cor.test(ffq.wide$Observed, ffq.wide$hei_plant_uniq,
-         alternative = 'greater',
-         method = 'spearman')
-```
-
-```{r}
-cor.test(ffq.wide$Shannon, ffq.wide$hei_plant_uniq,
-         alternative = 'greater',
-         method = 'spearman')
-```
-
-### All
-
-```{r}
-ggplot(ffq, aes(x = mean, y = hei_plant_all)) +
-     geom_point() +
-     facet_wrap(~measure, scales = 'free_x') +
-     labs(x = 'Alpha diversity value by metabarcoding',
-          y = 'HEI-2015 plant components score') +
-     theme_bw()
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results', 'miniseq', 'Combined', 'alpha diversity',
-#             paste0(plotID, '_HEI-2015, all plant categories.png')),
-#        height = 3, width = 5)
-```
-
-```{r}
-cor.test(ffq.wide$Observed, ffq.wide$hei_plant_all,
-         alternative = 'greater',
-         method = 'spearman')
-```
-
-```{r}
-cor.test(ffq.wide$Shannon, ffq.wide$hei_plant_all,
-         alternative = 'greater',
-         method = 'spearman')
-```
-
-## vs. demographics
-
-### Age
-```{r}
-ggplot(ffq, aes(x = age, y = mean)) +
-     geom_point() +
-     facet_wrap(~measure, scales = 'free_y')
-```
-
-```{r}
-summary(lm(Observed ~ age, ffq.wide))
-```
-
-### Sex
-
-```{r}
-ggplot(ffq, aes(x = sex, y = mean, by = sex, group = sex)) +
-     geom_boxplot() + 
-     facet_wrap(~measure, scales = 'free_y')
-```
-
-```{r}
-men <- ffq.wide$Shannon[ffq.wide$sex == 1]
-women <- ffq.wide$Shannon[ffq.wide$sex == 2]
-
-t.test(men, women)
-```
-
+Adding more comprehensive demographic data?
