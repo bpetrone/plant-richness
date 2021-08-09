@@ -1,0 +1,565 @@
+---
+title: "Figure 3"
+output: html_notebook
+---
+
+# Setup
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r, include=FALSE, echo=FALSE}
+library(here)
+library(phyloseq)
+library(tidyverse)
+```
+
+# Read in data
+
+```{r}
+ps = readRDS("../data/raw/20210612_updated_ps.rds")
+
+sample_names(ps) %>%
+  length()
+
+sample_data(ps)$subj = as.double(sample_data(ps)$subj)
+```
+
+```{r}
+data = read_csv("../data/metadata/20210805_pomms_clean_metadata_estimate.csv")
+
+data
+```
+
+# Merging metadata and phyloseq object
+
+```{r}
+row_df = as_tibble(sample_data(ps), rownames) %>%
+  select(R24_id, subj, visit)
+
+full_data = left_join(row_df, data) %>%
+  arrange(subj)
+  
+```
+
+```{r}
+sam = as_tibble(sample_data(ps), rownames= "row_names") %>%
+    select(row_names, everything())
+
+complete_data = left_join(sam, full_data) %>%
+    column_to_rownames("row_names")
+
+sample_data(ps) = sample_data(complete_data)
+
+#sample_data(ps)
+```
+```{r}
+rm(sam)
+rm(complete_data)
+```
+
+# Alpha Diversity
+
+```{r}
+ps_foods = subset_taxa(ps, !is.na(kingdom))
+#ps_foods = ps
+
+```
+
+```{r}
+# Update read counts in phyloseq object
+sample_data(ps_foods)$reads = sample_sums(ps_foods)
+```
+
+```{r}
+# What percentage of reads does this retain (overall)?
+sum(sample_sums(ps_foods))/sum(sample_sums(ps))
+```
+
+```{r}
+# What percentage of reads does this retain (per sample)?
+(sample_sums(ps_foods)/sample_sums(ps)) %>% 
+     data.frame(percentage = . ) %>% 
+     ggplot(., aes(x = percentage)) +
+     geom_histogram(binwidth = 0.05, boundary = 0) +
+     theme_bw()
+```
+Idea here would be to follow up on samples that have <90% of their reads preserved after removing those not identified to plant.
+
+
+```{r}
+(sample_sums(ps_foods)/sample_sums(ps)) %>% 
+     data.frame(percentage = . ) %>% 
+     filter(is.na(percentage) | percentage < 0.9)
+```
+
+## Read counts
+```{r}
+# Remove samples that do not have any food reads (8 in all)
+ps_foods = 
+     ps_foods %>% 
+     prune_samples(sample_sums(.) > 0, .) %>% 
+     prune_taxa(taxa_sums(.) > 0, .)
+
+
+ps_foods
+```
+
+## Estimate alpha diversity:
+
+```{r}
+alpha = estimate_richness(ps_foods, measures = c('Observed', 'Shannon')) %>%
+     rownames_to_column(var = 'name') %>%
+  separate(name, into= c("x", "name"), sep = "X") %>%
+  select(!x) %>%
+  rename_with(tolower)
+  
+
+alpha
+```
+
+```{r}
+# Join to read counts
+samdf = 
+     data.frame(ps_foods@sam_data) %>% 
+     rownames_to_column(var = 'name')
+
+alpha = 
+     samdf %>% 
+     #select(name, reads, subj) %>% 
+     right_join(alpha)
+
+alpha
+```
+
+```{r}
+alpha = alpha %>%
+  group_by(subj) %>%
+  mutate(samples= n(),
+         mean_shannon = mean(shannon),
+         mean_observed = mean(observed))%>%
+  ungroup() %>%
+  rename_with(tolower)  %>%
+  mutate(paired = rep(1:(n()/2),each=2),
+         visit=factor(visit)) 
+
+alpha
+```
+
+```{r}
+# Paired samples
+paired = alpha %>%
+  filter(samples == 2) %>%
+  arrange(subj, visit)
+
+paired
+
+#266 rows total
+
+266/2
+
+#133 paired samples
+```
+
+```{r}
+#Glancing at change in alpha diversity by visit
+
+alpha %>%
+  filter(samples == 2) %>%
+  arrange(subj, visit) %>%
+  select(subj, visit, observed, shannon)
+
+```
+
+```{r}
+alpha_long = pivot_longer(alpha, cols = c(observed, shannon,mean_observed, mean_shannon),
+                           names_to = 'measure', values_to = 'value')
+alpha_long$visit =  as.character(alpha_long$visit)
+
+alpha_long
+```
+
+# Change in alpha diversity
+
+## How does alpha diversity change between visits, seperated by intervention group:
+```{r}
+# This is conducted considering only subjects that had two samples: i.e. pairs.
+
+alpha_long %>%
+  #filter(is.na(Food.Insecurity.Scrn.Complete) == FALSE) %>%
+  filter(samples == 2) %>%
+  #select(subj, Visit.Age, Samples, visit, Food.Insecurity.Scrn.Complete, Food1, Food_run_out, Food2, Food_ran_out, Observed, Shannon, Mean_Observed,Mean_Shannon) %>%
+  #pivot_longer(Observed:Mean_Shannon, names_to = "Measure", values_to = "Value") %>%
+  filter(measure == "observed" | measure == "shannon") %>%
+  ggplot(aes(x= group, y = value, colour= visit))+
+  geom_jitter(alpha = 0.65, size=1, width= 0.2)+
+  geom_boxplot(alpha = 0.5)+
+  facet_wrap(~measure, scales = "free_y")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust= 1))
+  
+
+ggsave("change_alpha_diversity_group.png", width = 10)
+```
+
+## Were subjects who increased in alpha diversity the same as those who lost weight?
+
+```{r}
+# more_div = alpha %>%
+#   select(subj, visit, Delta_BMI_P95, Observed, Shannon) %>%
+#   pivot_wider(names_from = visit, values_from= c(Observed, Shannon))%>%
+#   filter(Observed_5 > Observed_1) %>%
+#   pull(subj)
+# 
+# less_weight = alpha %>%
+#   select(subj, visit, Delta_BMI_P95, Observed, Shannon) %>%
+#   pivot_wider(names_from = visit, values_from= c(Observed, Shannon))%>%
+#   filter(Delta_BMI_P95 < 0) %>%
+#   pull(subj)
+#   
+# (intersect(less_weight, more_div) %>%
+#   length())/(more_div %>%
+#   length())*100
+# 
+# (intersect(less_weight, more_div) %>%
+#   length())/(less_weight %>%
+#   length())*100
+
+```
+No, more than half of those who lost weight are not the same as those who increased in diversity.
+
+# By Read Depth
+
+```{r}
+ggplot(alpha_long, aes(x = reads, y = value)) +
+     geom_point() +
+     labs(x = 'Read depth', y = 'Alpha diversity') +
+     facet_wrap(~measure, scales = 'free_y') +
+     theme_bw()
+```
+
+# Plots
+
+## Treating all points as separate
+```{r}
+alpha_long %>%
+  filter(measure == "observed" | measure == "shannon") %>%
+  ggplot(aes(x= age, y = value, group = age))+
+  geom_boxplot()+
+  facet_wrap(~measure, scales = "free_y")+
+  theme_bw()
+```
+```{r}
+alpha_long %>%
+  filter(measure == "observed" | measure == "shannon") %>%
+  ggplot(aes(x= age_days, y = value))+
+  geom_point()+
+  geom_smooth()+
+  facet_wrap(~measure, scales = "free_y")+
+  theme_bw()
+```
+
+## Considering averages
+
+```{r}
+alpha_long %>%
+  filter(measure == "mean_observed" | measure == "mean_shannon") %>%
+  ggplot(aes(x= age, y = value, group = age))+
+  geom_boxplot()+
+  facet_wrap(~measure, scales = "free_y")+
+  theme_bw()
+
+#ggsave("figures/alpha_age_average_boxplot.png", width = 9)
+
+alpha_long %>%
+  filter(measure == "mean_observed" | measure == "mean_shannon") %>%
+  ggplot(aes(x= age_days, y = value))+
+  geom_point()+
+  geom_smooth()+
+  facet_wrap(~measure, scales = "free_y")+
+  theme_bw()
+
+#ggsave("figures/alpha_age_average_scatter.png", width = 9)
+
+```
+## Individual points separated by visit
+
+```{r}
+alpha_long %>%
+  filter(measure == "observed" | measure == "shannon") %>%
+  filter(visit == 1) %>%
+  ggplot(aes(x= age, y = value, group = age))+
+  geom_boxplot()+
+  facet_wrap(~measure, scales = "free_y")+
+  theme_bw()+
+  labs(title = "Visit 1")
+
+#ggsave("figures/alpha_age_visit1_boxplot.png", width = 9)
+
+
+alpha_long %>%
+  filter(measure == "observed" | measure == "shannon") %>%
+  filter(visit == 5) %>%
+  ggplot(aes(x= age, y = value, group = age))+
+  geom_boxplot()+
+  facet_wrap(~measure, scales = "free_y")+
+  theme_bw()+
+  labs(title = "Visit 5")
+
+#ggsave("figures/alpha_age_visit5_boxplot.png", width = 9)
+
+
+```
+
+```{r}
+alpha_long %>%
+  filter(measure == "observed" | measure == "shannon") %>%
+  filter(visit == 1) %>%
+  ggplot(aes(x= age_days, y = value))+
+  geom_point()+
+  geom_smooth()+
+  facet_wrap(~measure, scales = "free_y")+
+  theme_bw()+
+  labs(title = "Visit 1")
+
+#ggsave("figures/alpha_age_visit1_scatter.png", width = 9)
+
+alpha_long %>%
+  filter(measure == "observed" | measure == "shannon") %>%
+  filter(visit == 5) %>%
+  ggplot(aes(x= age_days, y = value))+
+  geom_point()+
+  geom_smooth()+
+  facet_wrap(~measure, scales = "free_y")+
+  theme_bw()+
+  labs(title = "Visit 5")
+
+#ggsave("figures/alpha_age_visit5_scatter.png", width = 9)
+
+```
+
+## Different plots:
+
+```{r}
+alpha_long%>%
+  filter(measure == "observed" | measure == "shannon") %>%
+  #filter(group == "Lifestyle") %>%
+  ggplot(aes(x= visit, y = value, colour = group))+
+  geom_jitter() +
+  geom_line(aes(group=paired)) +
+  facet_wrap(~measure, scales = "free_y")+
+  theme_bw()
+  #theme(legend.position = "none")
+```
+
+
+# Correlation testing
+
+--> Try fitting a linear regression too maybe?
+
+## By Age_Days:
+
+```{r}
+alpha$age_days %>%
+  unique()
+```
+### V1 subset
+```{r}
+v1= alpha %>%
+  filter(visit == 1)
+```
+
+#### Spearman
+
+```{r}
+cor.test(x= v1$age_days, y= v1$observed, method= "spearman", exact = FALSE) %>%
+  glance() %>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "observed")
+```
+
+```{r}
+cor.test(x= v1$age_days, y= v1$shannon, method= "spearman", exact = FALSE) %>%
+  glance() %>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "shannon")
+
+```
+
+#### Pearson
+```{r}
+cor.test(x= v1$age_days, y= v1$observed, method= "pearson", exact = FALSE) %>%
+  glance()%>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "observed")
+```
+
+```{r}
+cor.test(x= v1$age_days, y= v1$shannon, method= "pearson", exact = FALSE)%>%
+  glance() %>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "shannon")
+
+```
+#### regression
+
+```{r}
+glance(lm(v1$observed ~ v1$age_days))
+```
+```{r}
+glance(lm(v1$shannon ~ v1$age_days))
+```
+
+
+### V5 subset
+
+```{r}
+v5= alpha %>%
+  filter(visit == 5)
+```
+
+#### Spearman
+```{r}
+cor.test(x= v5$age_days, y= v5$observed, method= "spearman", exact = FALSE) %>%
+  glance() %>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "observed")
+```
+
+```{r}
+cor.test(x= v5$age_days, y= v5$shannon, method= "spearman", exact = FALSE) %>%
+  glance() %>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "shannon")
+
+```
+#### Pearson
+
+
+```{r}
+cor.test(x= v5$age_days, y= v5$observed, method= "pearson", exact = FALSE) %>%
+  glance()%>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "observed")
+```
+
+```{r}
+cor.test(x= v5$age_days, y= v5$shannon, method= "pearson", exact = FALSE)%>%
+  glance() %>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "shannon")
+
+```
+#### regression
+
+```{r}
+glance(lm(v5$observed ~ v5$age_days))
+```
+
+```{r}
+glance(lm(v5$shannon ~ v5$age_days))
+```
+
+### By averages 
+
+#### Spearman
+
+```{r}
+glance(cor.test(x = alpha$age_days, y = alpha$mean_observed, method = "spearman", exact = FALSE))%>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "mean_observed")
+```
+
+```{r}
+glance(cor.test(x = alpha$age_days, y = alpha$mean_shannon, method = "spearman", exact = FALSE))%>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "mean_shannon")
+```
+#### Pearson
+
+```{r}
+glance(cor.test(x = alpha$age_days, y = alpha$mean_observed, method = "pearson"))%>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "mean_observed")
+  
+```
+
+```{r}
+glance(cor.test(x = alpha$age_days, y = alpha$mean_shannon, method = "pearson"))%>%
+  select(estimate, statistic, p.value, method) %>%
+  mutate(x = "age_days", y = "mean_shannon")
+
+```
+#### regression
+
+```{r}
+glance(lm(alpha$mean_observed ~ alpha$age_days))
+```
+
+```{r}
+glance(lm(alpha$mean_shannon ~ alpha$age_days))
+```
+
+
+## Alpha diversity grant figure:
+
+```{r}
+
+annotation = data.frame(value = c("Observed", "Shannon"), label = c("rho = -0.1, p = 0.054", "rho = -0.15, p = 0.004"))
+
+
+ alpha_long%>%
+  filter(measure == "observed" | measure == "shannon") %>%
+ggplot( aes(x = age_days, y = value)) +
+     geom_point(color= "grey28", size= 2.5, alpha= 0.5) +
+  #geom_smooth(method = "lm")+
+     labs(x = expression(paste("Age in days")), y = expression(paste("trnl ", alpha, " diversity"))) +
+     facet_wrap(~measure, scales = 'free_y')+
+    #geom_text(x = 4500, y = 0, aes(label = label), data = annotation)+
+     theme_bw()+
+  theme(axis.title.y = element_text(colour= "grey41", face= "bold", size = 20),
+        axis.title.x = element_text(colour= "grey41", face= "bold", size = 20),
+        strip.text.x = element_text(size = 15, face = "bold"),
+        axis.text.x = element_text(face="bold", colour = "black"),
+        axis.text.y = element_text(face="bold", colour = "black"))
+
+#ggsave("C:/Users/Ammara Aqeel/Box/project_davidlab/LAD_LAB_Personnel/Ammara_A/Grants/Brianna_analysis/grant_alpha_diversity_figure.png", width= 6, height = 4)
+```
+
+```{r}
+alpha_long %>%
+  filter(measure == "observed" | measure == "shannon") %>%
+ggplot(aes(x = age, y = value, group = age)) +
+     geom_boxplot(color= "grey28", alpha= 0.5, size= 1.05) +
+     labs(x = expression(paste("Age")), y = expression(paste("trnl ", alpha, " diversity"))) +
+     facet_wrap(~measure, scales = 'free_y')+
+     theme_bw()+
+  theme(axis.title.y = element_text(colour= "grey41", face= "bold", size = 20),
+        axis.title.x = element_text(colour= "grey41", face= "bold", size = 20),
+        strip.text.x = element_text(size = 15, face = "bold"),
+        axis.text.x = element_text(face="bold", colour = "black", size= 15),
+        axis.text.y = element_text(face="bold", colour = "black", size = 15))
+
+#ggsave("C:/Users/Ammara Aqeel/Box/project_davidlab/LAD_LAB_Personnel/Ammara_A/Grants/Brianna_analysis/grant_alpha_diversity_boxplot.png", width= 8, height = 5)
+```
+# Rough Stuff, don't run
+## By Age:
+
+```{r}
+alpha$age %>%
+  unique()
+```
+
+```{r}
+glance(kruskal.test(age ~ observed , data = alpha))%>%
+  mutate(x = "age", y = "observed")
+  
+```
+
+```{r}
+glance(kruskal.test(age ~ shannon , data = alpha)) %>%
+  mutate(x = "age", y = "shannon")
+```
+
