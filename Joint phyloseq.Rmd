@@ -265,42 +265,62 @@ samdf <-
 sum(samdf$reads_food)/sum(samdf$reads_tot)
 ```
 
-## Test for read count threshold
+## Read count threshold?
 
 ### Distribution
 
 ```{r}
 # Faceted by study
-ggplot(samdf, aes(x = reads_food)) +
+ggplot(samdf, aes(x = reads_food, fill = study)) +
      geom_histogram(binwidth = 10000, boundary = 0) +
      facet_wrap(~study, scales = 'free_y') +
+     scale_fill_manual(values = c('darkgreen', 'gray80', 'gray40', 'gold2')) +
      # xlim(0, 50000) +
-     labs(x = 'Read count', y = 'Count') +
-     theme_bw()
+     labs(x = 'Read count (food taxa)', y = 'Samples (n)') +
+     theme_bw() +
+     theme(axis.text.x = element_text(angle = 20, hjust = 1),
+           legend.title = element_blank())
 ```
 
 ```{r}
-ggplot(samdf, aes(x = reads_food, color = study)) +
-     geom_histogram(binwidth = 10000,
-                    boundary = 0) +
-     geom_density(aes(color = study), 
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+ggsave(here('results', 'manuscript', 'supplemental',
+            paste0(plotID, '_Read depth of samples by study, facet.pdf')),
+       height = 4, width = 6)
+```
+
+```{r}
+ggplot(samdf, aes(x = reads_food, y = ..density.., 
+                  color = study, fill = study)) +
+     geom_histogram(alpha = 0.5,
+                    binwidth = 10000,
+                    boundary = 0,
+                    position = 'identity') +
+     geom_density(aes(color = study),
                   alpha = 0.5,
-                  size = 2,
-                  stat = 'bin',
-                  binwidth = 10000) +
-     labs(x = 'Read count (food taxa)', y = 'Count') +
+                  size = 1.5) +
+     scale_color_manual(values = c('darkgreen', 'gray80', 'gray40', 'gold2')) +
+     scale_fill_manual(values = c('darkgreen', 'gray80', 'gray40', 'gold2')) +
+     labs(x = 'Read count (food taxa)', y = 'Samples (n)') +
      theme_bw() +
      theme(legend.title = element_blank())
 ```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 
+ggsave(here('results', 'manuscript', 'supplemental',
+            paste0(plotID, '_Read depth of samples by study, overlay.pdf')),
+       height = 4, width = 6)
+```
 
 ```{r}
 # Overall histogram
-ggplot(samdf, aes(x = reads_food)) +
-     geom_histogram(binwidth = 1000, boundary = 0) +
-     # facet_wrap(~study, scales = 'free_y') +
-     xlim(0, 50000) +
-     labs(x = 'Read count', y = 'Count') +
+ggplot(samdf, aes(x = reads_food, fill = study)) +
+     geom_histogram(binwidth = 10000, boundary = 0) +
+     # xlim(0, 50000) +
+     scale_fill_manual(values = c('darkgreen', 'gray80', 'gray40', 'gold2')) +
+     labs(x = 'Read count', y = 'Samples (n)') +
      theme_bw()
 ```
 
@@ -322,7 +342,7 @@ ggplot(samdf, aes(x = reads_food)) +
      theme_bw()
 ```
 
-## Iterative PERMANOVA
+### Iterative PERMANOVA
 
 Want to do this with Jaccard distance, since ideally analyses here are based on 
 number of observed species. 
@@ -418,7 +438,7 @@ ggsave(here('results', 'manuscript', 'supplemental',
 readcounts.permanova %>% 
      filter(fit == 'p' & value > 0.05)
 ```
-## Rarefaction
+### Rarefaction
 
 #### Inspect curves
 
@@ -433,6 +453,13 @@ dim(asvtab)
 # Randomly choose 20 CHOMP rows
 rarecurve(asvtab[1:20, ], col = "blue")
 ```
+
+```{r}
+# Contrast with 20 ONR rows
+n <- sample(grep('ONR-', row.names(asvtab)), 20)
+rarecurve(asvtab[n, ], col = "blue")
+```
+
 
 More important than the curves may be conclusions we can draw from the slope: `rareslope` calculates the slope of `rarecurve` at `sample` size (can be a vector).
 ```{r}
@@ -482,15 +509,47 @@ asvtab <-
      otu_table() %>% 
      getElement('.Data')
 
-asvtab.rare <- rarefy(asvtab, sample = raremin, se = TRUE)
+asvtab.rare.5000 <- rarefy(asvtab, sample = raremin, se = TRUE)
+dim(asvtab.rare.5000)
+```
+
+```{r}
+raremin <- 10500
+
+# Discard samples with less than this read count
+asvtab <- 
+     ps %>% 
+     prune_samples(sample_sums(.) > raremin, .) %>% 
+     prune_taxa(taxa_sums(.) > 0, .) %>% 
+     otu_table() %>% 
+     getElement('.Data')
+
+asvtab.rare.10500 <- rarefy(asvtab, sample = raremin, se = TRUE)
+dim(asvtab.rare.10500)
 ```
 
 ```{r}
 # How does this compare to actual number passed to analysis below?
 rarefaction.df <- 
-     data.frame(obs_rare = asvtab.rare[1, ],
-                obs_rare_se = asvtab.rare[2, ]) %>% 
+     data.frame(threshold = 5000,
+                obs_rare = asvtab.rare.5000[1, ],
+                obs_rare_se = asvtab.rare.5000[2, ]) %>% 
      rownames_to_column(var = 'name')
+
+rarefaction.df <- 
+     data.frame(threshold = 10500,
+                obs_rare = asvtab.rare.10500[1, ],
+                obs_rare_se = asvtab.rare.10500[2, ]) %>% 
+     rownames_to_column(var = 'name') %>% 
+     bind_rows(rarefaction.df)
+
+# Pivot wider (one row per sample)
+rarefaction.df <- 
+     pivot_wider(rarefaction.df,
+                 names_from = threshold,
+                 names_sep = '_',
+                 values_from = c(obs_rare, obs_rare_se),
+                 values_fill = NA)
 
 # Add actual # observed taxa
 rarefaction.df <- 
@@ -503,10 +562,46 @@ rarefaction.df <-
 How well do they agree with one another?
 ```{r}
 # Could maybe add standard error on top of this?
-ggplot(rarefaction.df, aes(x = obs, y = obs_rare)) + 
+ggplot(rarefaction.df, aes(x = obs, y = obs_rare_5000)) + 
+     geom_abline(slope = 1, intercept = 0, color = 'red') +
      geom_point() +
      coord_equal() +
+     labs(x = 'Observed taxa (raw)', y = 'Observed taxa (rarefied)',
+          title = '5,000 read threshold') + 
      theme_bw()
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+# ggsave(here('results', 'manuscript', 'supplemental',
+#             paste0(plotID, '_Observed taxa, 5,000 read rarefaction.pdf')),
+#        height = 4, width = 4)
+```
+
+```{r}
+# Could maybe add standard error on top of this?
+ggplot(rarefaction.df, aes(x = obs, y = obs_rare_10500)) + 
+     geom_abline(slope = 1, intercept = 0, color = 'red') +
+     geom_point() +
+     coord_equal() +
+     labs(x = 'Observed taxa (raw)', y = 'Observed taxa (rarefied)',
+          title = '10,500 read threshold') + 
+     theme_bw()
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+# ggsave(here('results', 'manuscript', 'supplemental',
+#             paste0(plotID, '_Observed taxa, 10,500 read rarefaction.pdf')),
+#        height = 4, width = 4)
+```
+
+
+```{r}
+# Save rarefied data
+# saveRDS(rarefaction.df,
+#         here('data', 'processed', 'rarefaction',
+#              'Rarefied trnL counts (5,000 or 10,500 reads).rds'))
 ```
 
 Now, try repeating read count plots and alpha diversity with rarefied data. 
