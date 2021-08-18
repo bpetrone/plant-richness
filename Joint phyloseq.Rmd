@@ -14,6 +14,7 @@ library(here)
 library(MButils) # for lowest_level naming
 library(phyloseq)
 library(tidyverse)
+library(vegan)
 ```
 
 # Load input data
@@ -499,21 +500,6 @@ Ok, so let's consider then a 5000-read threshold, which would mean we'd need 14,
 From iterative PERMANOVA on Jaccard distances, may want threshold of 10,500.
 
 ```{r}
-raremin <- 5000
-
-# Discard samples with less than this read count
-asvtab <- 
-     ps %>% 
-     prune_samples(sample_sums(.) > raremin, .) %>% 
-     prune_taxa(taxa_sums(.) > 0, .) %>% 
-     otu_table() %>% 
-     getElement('.Data')
-
-asvtab.rare.5000 <- rarefy(asvtab, sample = raremin, se = TRUE)
-dim(asvtab.rare.5000)
-```
-
-```{r}
 raremin <- 10500
 
 # Discard samples with less than this read count
@@ -524,32 +510,17 @@ asvtab <-
      otu_table() %>% 
      getElement('.Data')
 
-asvtab.rare.10500 <- rarefy(asvtab, sample = raremin, se = TRUE)
-dim(asvtab.rare.10500)
+asvtab.rare <- rarefy(asvtab, sample = raremin, se = TRUE)
+asvtab.rare[1:2, 1:5]
 ```
 
 ```{r}
 # How does this compare to actual number passed to analysis below?
 rarefaction.df <- 
-     data.frame(threshold = 5000,
-                obs_rare = asvtab.rare.5000[1, ],
-                obs_rare_se = asvtab.rare.5000[2, ]) %>% 
-     rownames_to_column(var = 'name')
-
-rarefaction.df <- 
      data.frame(threshold = 10500,
-                obs_rare = asvtab.rare.10500[1, ],
-                obs_rare_se = asvtab.rare.10500[2, ]) %>% 
-     rownames_to_column(var = 'name') %>% 
-     bind_rows(rarefaction.df)
-
-# Pivot wider (one row per sample)
-rarefaction.df <- 
-     pivot_wider(rarefaction.df,
-                 names_from = threshold,
-                 names_sep = '_',
-                 values_from = c(obs_rare, obs_rare_se),
-                 values_fill = NA)
+                obs_rare = asvtab.rare[1, ],
+                obs_rare_se = asvtab.rare[2, ]) %>% 
+     rownames_to_column(var = 'name') 
 
 # Add actual # observed taxa
 rarefaction.df <- 
@@ -562,26 +533,11 @@ rarefaction.df <-
 How well do they agree with one another?
 ```{r}
 # Could maybe add standard error on top of this?
-ggplot(rarefaction.df, aes(x = obs, y = obs_rare_5000)) + 
+ggplot(rarefaction.df, aes(x = obs, y = obs_rare)) + 
      geom_abline(slope = 1, intercept = 0, color = 'red') +
-     geom_point() +
-     coord_equal() +
-     labs(x = 'Observed taxa (raw)', y = 'Observed taxa (rarefied)',
-          title = '5,000 read threshold') + 
-     theme_bw()
-```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-
-# ggsave(here('results', 'manuscript', 'supplemental',
-#             paste0(plotID, '_Observed taxa, 5,000 read rarefaction.pdf')),
-#        height = 4, width = 4)
-```
-
-```{r}
-# Could maybe add standard error on top of this?
-ggplot(rarefaction.df, aes(x = obs, y = obs_rare_10500)) + 
-     geom_abline(slope = 1, intercept = 0, color = 'red') +
+     geom_errorbar(aes(ymin = obs_rare - obs_rare_se, 
+                       ymax = obs_rare + obs_rare_se), 
+                   width = 0.2) +
      geom_point() +
      coord_equal() +
      labs(x = 'Observed taxa (raw)', y = 'Observed taxa (rarefied)',
@@ -596,12 +552,21 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 #        height = 4, width = 4)
 ```
 
-
 ```{r}
 # Save rarefied data
 # saveRDS(rarefaction.df,
 #         here('data', 'processed', 'rarefaction',
-#              'Rarefied trnL counts (5,000 or 10,500 reads).rds'))
+#              'Rarefied trnL counts (10,500 reads).rds'))
 ```
 
 Now, try repeating read count plots and alpha diversity with rarefied data. 
+
+# By-cohort analyses
+
+## Weight loss
+
+## Adult-1 
+
+## Adult-2
+
+## Adolescent
