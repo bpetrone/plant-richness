@@ -1,0 +1,120 @@
+---
+title: "Figure 1"
+output: html_notebook
+---
+
+# Setup
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(here)
+library(MButils) # for lowest_level naming
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+```
+
+# Load data
+
+## trnL richness (+/- rarefaction)
+
+```{r}
+alpha <- 
+     here('data', 
+          'processed', 
+          'rarefaction',
+          'Rarefied trnL counts (10,500 reads).rds')
+```
+
+## Weight Loss menu data
+
+```{r}
+# Use menu phyloseq object
+ps.menu <- 
+     here('data', 
+          'processed', 
+          'Weight Loss', 
+          '20210220_ps_menu.rds') %>% 
+     readRDS()
+```
+
+# Pre-process
+
+## Menu data
+
+```{r}
+# Filter to plants only
+ntaxa(ps.menu)
+ps.menu <- subset_taxa(ps.menu,
+                       kingdom == 'Viridiplantae')
+ntaxa(ps.menu)
+```
+
+### Calculate richness
+
+```{r}
+# Get intake table
+asvtab.menu <- ps.menu@otu_table@.Data 
+# Calculate number of non-zero entries
+alpha.menu <- apply(asvtab.menu,
+                    1, 
+                    function(x){sum(x > 0)})  
+
+# Reformat as dataframe
+alpha.menu <- 
+     data.frame(obs_menu = alpha.menu) %>% 
+     rownames_to_column(var = 'row') %>% 
+     separate(row, into = c('subj', 'date'), sep = '_')
+```
+
+```{r}
+# Add weekday
+alpha.menu <- 
+     alpha.menu %>% 
+     mutate(date = as.Date(date, format = '%Y-%m-%d'),
+            weekday = weekdays(date))
+```
+
+# Analyze
+
+## Range of taxa 
+
+Overall dataset
+
+```{r}
+range(alpha.menu$obs_menu)
+```
+
+What if I filter out weekends (lower quality?)
+```{r}
+alpha.menu %>% 
+     filter(!(weekday %in% c('Saturday', 'Sunday'))) %>% 
+     pull(obs_menu) %>% 
+     range()
+```
+
+Median within each subject
+
+```{r}
+# Including weekends
+alpha.menu %>% 
+     group_by(subj) %>% 
+     summarize(median = median(obs_menu),
+               sd = sd(obs_menu))
+```
+
+```{r}
+# Excluding weekends
+alpha.menu %>% 
+     filter(!(weekday %in% c('Saturday', 'Sunday'))) %>% 
+     group_by(subj) %>% 
+     summarize(median = median(obs_menu),
+               sd = sd(obs_menu))
+```
+
+## Correlation with trnL richness
+
+
