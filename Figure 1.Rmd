@@ -26,13 +26,14 @@ alpha <-
      here('data', 
           'processed', 
           'rarefaction',
-          'Rarefied trnL counts (10,500 reads).rds')
+          'Rarefied trnL counts (10,500 reads).rds') %>% 
+     readRDS()
 ```
 
 ## Weight Loss menu data
 
 ```{r}
-# Use menu phyloseq object
+# Menu phyloseq object (taxa consumed)
 ps.menu <- 
      here('data', 
           'processed', 
@@ -41,9 +42,61 @@ ps.menu <-
      readRDS()
 ```
 
+```{r}
+# Menu summaries (nutrients consumed)
+nutrients <- 
+     here('data',
+          'processed',
+          'Weight Loss',
+          'Nutrients per day.csv') %>% 
+     read_csv()
+```
+
 # Pre-process
 
+## Metabarcoding data
+
+```{r}
+# Subset to Weight Loss samples and metadata only
+alpha <- 
+     alpha %>% 
+     filter(study == 'Weight Loss') %>% 
+     # Drop columns that are all NA
+     select(
+          where(function(x){ 
+               !all(is.na(x))
+          })
+     ) %>% 
+      # Re-order remainder
+     select(
+          subj,
+          date,
+          obs, 
+          threshold, 
+          starts_with('obs_rare')
+          ) 
+
+alpha
+```
+
+```{r}
+# Add link to menu day at varying lag
+
+# Label each stool sample with a week of preceding days as SUBJ_DATE
+for (delta in 1:7){
+     varname <- paste0('delta', delta)
+     alpha <- mutate(alpha, 
+                     !!varname := date - delta,)
+}
+
+alpha
+```
+
 ## Menu data
+
+```{r}
+head(sample_names(ps.menu))
+```
 
 ```{r}
 # Filter to plants only
@@ -67,15 +120,31 @@ alpha.menu <- apply(asvtab.menu,
 alpha.menu <- 
      data.frame(obs_menu = alpha.menu) %>% 
      rownames_to_column(var = 'row') %>% 
-     separate(row, into = c('subj', 'date'), sep = '_')
+     separate(row, 
+              into = c('subj', 'date_menu'), 
+              sep = '_')
 ```
 
 ```{r}
 # Add weekday
 alpha.menu <- 
      alpha.menu %>% 
-     mutate(date = as.Date(date, format = '%Y-%m-%d'),
-            weekday = weekdays(date))
+     mutate(date_menu = as.Date(date_menu, format = '%Y-%m-%d'),
+            weekday_menu = weekdays(date_menu)) %>% 
+     select(subj, date_menu, weekday_menu, obs_menu)
+
+alpha.menu
+```
+```{r}
+# Join to nutrient intakes
+alpha.menu <- 
+     left_join(alpha.menu, 
+               nutrients,
+               by = c('subj', 
+                      'date_menu' = 'date', 
+                      'weekday_menu' = 'weekday'))
+
+rm(nutrients)
 ```
 
 # Analyze
@@ -117,4 +186,228 @@ alpha.menu %>%
 
 ## Correlation with trnL richness
 
+Have two dataframes:
+
+* `alpha`
+* `alpha.menu`
+
+First, might want to understand day-to-day variability in trnL richness compared to menu richness.
+
+
+```{r}
+ggplot(alpha.menu, aes(x = date_menu, y = obs_menu, color = subj)) +
+     geom_point() +
+     facet_wrap(~subj, scales = 'free_x') +
+     theme_bw() +
+     theme(legend.position = 'none') 
+```
+```{r}
+ggplot(alpha, aes(x = date, y = obs_rare, color = subj)) +
+     geom_point() +
+     facet_wrap(~subj, scales = 'free_x') +
+     theme_bw() +
+     theme(legend.position = 'none') 
+```
+
+```{r}
+# 1 day of lag
+lag <- 'delta1'
+
+# Make joint object
+alpha.joint <- 
+     alpha %>%
+     select(subj,
+            date,
+            date_menu = all_of(lag), 
+            starts_with('obs')) %>% 
+     # mutate(delta = gsub('delta', '', lag)) %>% 
+     left_join(alpha.menu) %>% 
+     select(subj,
+            starts_with('date'),
+            weekday_menu,
+            starts_with('obs'),
+            everything())
+
+head(alpha.joint)
+```
+```{r}
+ggplot(alpha.joint, aes(x = obs_menu, y = obs_rare, color = subj)) +
+     geom_abline(slope = 1, intercept = 0) +
+     geom_point() +
+     lims(x = c(7, 46), y = c(7, 46)) +
+     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
+     coord_equal() +
+     theme_bw() +
+     theme(axis.title.y = ggtext::element_markdown())
+```
+```{r}
+cor.test(alpha.joint$obs_rare,
+         alpha.joint$obs_menu,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+Should I test other days, or leave it at that?
+
+What about excluding weekends?
+
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>%
+     cor.test(~ obs_rare + obs_menu, 
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+How about Sundays, Mondays only
+```{r}
+alpha.joint %>% 
+     filter(weekday_menu %in% c('Saturday', 'Sunday')) %>%
+     cor.test(~ obs_rare + obs_menu, 
+              data = .,
+              method = 'spearman')
+```
+
+How about in comparison to the day after today?
+
+```{r}
+alpha.next <- 
+     alpha %>% 
+     select(subj, date, obs_rare) %>% 
+     mutate(date_menu = date + 1) %>% 
+     left_join(alpha.menu) %>% 
+     select(subj,
+            starts_with('date'),
+            weekday_menu,
+            starts_with('obs'),
+            everything())
+
+alpha.next
+```
+
+```{r}
+ggplot(alpha.next, aes(x = obs_menu, y = obs_rare)) +
+     geom_point() +
+     lims(x = c(7, 46), y = c(7, 46)) +
+     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
+     coord_equal() +
+     theme_bw() +
+     theme(axis.title.y = ggtext::element_markdown())
+```
+```{r}
+cor.test(alpha.next$obs_rare,
+         alpha.next$obs_menu,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+How about with a random day (within each subject)?
+
+```{r}
+# Make joint object
+alpha.rand <- 
+     alpha %>%
+     select(subj, date, obs_rare)
+
+# Randomly choose a comparator day (within each subject)
+sample_subj <- function(s, n){
+     alpha.menu %>% 
+          filter(subj == s) %>% 
+          pull(row) %>% 
+          sample(size = n, replace = FALSE)
+}
+```
+
+```{r}
+# How many entries per subject do we need?
+alpha.rand %>% 
+     group_by(subj) %>% 
+     count()
+```
+
+
+```{r}
+set.seed(0816)
+
+rand.menu <- 
+     c(
+          sample_subj('AK65', 9),
+          sample_subj('JN55', 13),
+          sample_subj('ML48', 6),
+          sample_subj('PC74', 4)
+     ) %>% 
+     data.frame(comparator_rand = .) %>% 
+     left_join(alpha.menu,
+               by = c('comparator_rand' = 'row'))
+
+alpha.rand <- 
+     alpha.rand %>% 
+     arrange(subj) %>%
+     select(-subj) %>% 
+     bind_cols(rand.menu)
+```
+
+```{r}
+ggplot(alpha.rand, aes(x = obs_menu, y = obs_rare)) +
+     geom_point() +
+     lims(x = c(7, 46), y = c(7, 46)) +
+     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
+     coord_equal() +
+     theme_bw() +
+     theme(axis.title.y = ggtext::element_markdown())
+```
+
+```{r}
+cor.test(alpha.rand$obs_rare,
+         alpha.rand$obs_menu,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+How about with a random day (any day)?
+
+```{r}
+alpha.rand <- 
+     alpha %>%
+     mutate(sample = paste(subj, date, sep = '_'))  %>% 
+     select(subj, sample, obs_rare)
+
+dim(alpha.rand)
+```
+
+```{r}
+set.seed(1234)
+alpha.rand <- 
+     bind_cols(alpha.rand, 
+               row = sample(alpha.menu$row, 32))
+
+alpha.rand <- 
+     alpha.rand %>% 
+     select(-subj) %>% 
+     left_join(alpha.menu)
+```
+
+```{r}
+ggplot(alpha.rand, aes(x = obs_menu, y = obs_rare)) +
+     geom_point() +
+     lims(x = c(7, 46), y = c(7, 46)) +
+     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
+     coord_equal() +
+     theme_bw() +
+     theme(axis.title.y = ggtext::element_markdown())
+```
+```{r}
+cor.test(alpha.rand$obs_rare,
+         alpha.rand$obs_menu,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+## Relationship to macronutrient intake
+
+Start with just one day's comparison. 
+```{r}
+
+```
 
