@@ -406,8 +406,57 @@ cor.test(alpha.rand$obs_rare,
 
 ## Relationship to macronutrient intake
 
-Start with just one day's comparison. 
-```{r}
+Start with just one day's comparison. Can use joint object made above.
 
+### Calories
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
+     ggplot(aes(x = calories, y = obs_rare, color = subj)) +
+     geom_point()
 ```
 
+### Carbohydrates
+
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
+     ggplot(aes(x = `carbohydrates (g)`, y = obs_rare, color = subj)) +
+     geom_point()
+```
+
+### Fat
+
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
+     ggplot(aes(x = `fat (g)`, y = obs_rare, color = subj)) +
+     geom_point()
+```
+
+### Protein
+
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
+     ggplot(aes(x = `protein (g)`, y = obs_rare, color = subj)) +
+     geom_point()
+```
+
+### Fiber
+
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
+     ggplot(aes(x = `dietary fiber (g)`, y = obs_rare, color = subj)) +
+     geom_point()
+```
+
+### Food groups
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
+     ggplot(aes(x = vegetables + starches + fruits, 
+                y = obs_rare, color = subj)) +
+     geom_point()
+```
