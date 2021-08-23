@@ -1,0 +1,30 @@
+---
+title: "Figure 2 (Adult-1, Adult-2)"
+output: html_notebook
+---
+
+# Setup
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r, include=FALSE, echo=FALSE}
+library(here)
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+```
+
+# Read in data
+
+## trnL
+Note this is already trimmed to only those taxa identified to a food species, with duplicated taxa collapsed.
+```{r}
+# Read in last saved phyloseqs
+ps <- 
+     here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds') %>% 
+     readRDS()
+
+ps
+```
