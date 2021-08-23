@@ -13,12 +13,12 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 library(here)
 library(phyloseq)
 library(tidyverse)
-library(vegan)
 ```
 
 # Read in data
 
 ## trnL
+
 Note this is already trimmed to only those taxa identified to a food species, with duplicated taxa collapsed.
 ```{r}
 # Read in last saved phyloseqs
@@ -28,3 +28,250 @@ ps <-
 
 ps
 ```
+
+### Rarefied richness estimates
+
+```{r}
+rare.df <- 
+     here('data', 
+          'processed', 
+          'rarefaction',
+          'Rarefied trnL counts (10,500 reads).rds') %>% 
+     readRDS
+
+rare.df
+```
+## Diet surveys
+
+### ASA24
+
+### DHQ3
+
+## Diet surveys
+
+### DHQ3
+
+#### Adult-1
+
+```{r}
+ffq.adult1 <- 
+     here('data', 
+          'processed', 
+          'Adult-1', 
+          'DHQ3.csv') %>% 
+     read_csv()
+
+head(ffq.adult1)
+```
+
+#### Adult-2
+
+```{r}
+ffq.adult2 <- 
+     here('data', 
+          'processed', 
+          'Adult-2', 
+          'DHQ3.csv') %>% 
+     read_csv()
+
+head(ffq.adult2)
+```
+
+
+# Pre-process
+
+## trnL
+
+```{r}
+# Filter to Adult-1 and -2 cohorts only
+ps <- 
+     ps %>% 
+     subset_samples(study %in% c('Adult-1', 'Adult-2')) %>% 
+     prune_taxa(taxa_sums(.) > 0, .)
+
+ps
+```
+
+## Diet surveys
+
+Pull subject ID and any columns relevant to HEI.
+
+```{r}
+ffq <- select(ffq, 
+              subj, 
+              age = Age,
+              sex = `Sex (1=male; 2=female)`, 
+              matches('HEI'))
+names(ffq)
+```
+
+I am assuming here that total vegetables, total fruits, and total whole grains are non-overlapping and include the other listed plant categories, but I am not certain. 
+Tally these up independently, and also tally all plant categories for comparison.
+
+```{r}
+ffq <- 
+     ffq %>% 
+     rename(hei_tot = 'Total HEI-2015 Score',
+            hei_veg = 'HEI-2015 - Total Vegetables - Component Score',
+            hei_greensbeans = 'HEI-2015 - Greens and Beans - Component Score',
+            hei_fruit = 'HEI-2015 - Total Fruits - Component Score',
+            hei_wholefruits = 'HEI-2015 - Whole Fruits - Component Score',
+            hei_grain = 'HEI-2015 - Whole Grains - Component Score') %>% 
+     # Make custom plant column
+     mutate(hei_plant_uniq = hei_veg + hei_fruit + hei_grain,
+            hei_plant_all = hei_veg + hei_greensbeans + hei_fruit + 
+                 hei_wholefruits + hei_grain)
+
+ffq
+```
+
+
+# Analyze
+
+```{r}
+samdf <- data.frame(ps@sam_data)
+```
+
+
+## Read depth
+
+```{r}
+range(sample_data(ps)$reads_food)
+```
+
+```{r}
+# Have I appropriately preserved failed samples in the phyloseq object?
+# TODO: Check this in ONR and CHOMP runs
+any(sample_sums(ps) == 0)
+```
+
+```{r}
+median(sample_data(ps)$reads_food)
+```
+
+```{r}
+sd(sample_data(ps)$reads_food)
+```
+
+### Read count histograms
+
+```{r}
+hist(sample_data(ps)$reads_food)
+```
+
+```{r}
+# Faceted by study
+ggplot(samdf, aes(x = reads_food, fill = study)) +
+     geom_histogram(binwidth = 10000, boundary = 0) +
+     facet_wrap(~study) +
+     scale_fill_manual(values = c('gray80', 'gray40')) +
+     # xlim(0, 50000) +
+     labs(x = 'Read count (food taxa)', y = 'Samples (n)') +
+     theme_bw() +
+     theme(axis.text.x = element_text(angle = 20, hjust = 1),
+           legend.title = element_blank(),
+           legend.position = 'none')
+```
+
+### Rarefaction curves
+
+#### Stats
+
+```{r}
+# Number of dropped samples
+sum(sample_sums(ps) < 10500)
+```
+
+```{r}
+# Percentage
+# Number of dropped samples
+sum(sample_sums(ps) < 10500)/nsamples(ps) * 100
+```
+
+## Richness by participant
+
+## By subject 
+
+```{r}
+# Refactor subject IDs in order of descending median taxa observations
+alpha.stats <- 
+     alpha %>% 
+     group_by(subj) %>% 
+     summarize(med = median(obs_rare_10500, na.rm = TRUE), 
+               sd = sd(obs_rare_10500, na.rm = TRUE)) %>% 
+     arrange(desc(med))
+
+alpha$subj <- factor(alpha$subj, levels = alpha.stats$subj)
+```
+
+```{r}
+alpha %>% 
+     ggplot(aes(x = subj, y = obs_rare_10500)) +
+     geom_boxplot() +
+     facet_wrap(~study, scales = 'free_x') +
+     labs(x = 'Participant') +
+     theme_bw() +
+     theme(
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(), 
+          panel.grid.major.x = element_blank()
+     )
+```
+
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 'miniseq', 'Combined', 'alpha diversity',
+            paste0(plotID, '_Alpha diversity by study, raw.pdf')),
+       height = 3, width = 5)
+```
+
+```{r}
+alpha %>% 
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     ggplot(aes(x = subj, y = obs_rare_10500, fill = study)) +
+     geom_boxplot() +
+     # facet_wrap(~study, scales = 'free_x') +
+     labs(x = 'Participant', y = 'trnL richness') +
+     scale_fill_manual(values = c('gray80', 'gray40')) +
+     theme_bw() +
+     theme(
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(), 
+          panel.grid.major.x = element_blank(),
+          legend.position = c(0.9,0.8),
+          legend.background = element_rect(color = 'black'),
+          legend.title = element_blank()
+     )
+```
+
+```{r}
+adult.stats <- 
+     alpha %>% 
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     group_by(subj) %>% 
+     summarize(med = median(obs_rare_10500,
+                            na.rm = TRUE),
+               sd = sd(obs_rare_10500,
+                       na.rm = TRUE))
+
+range(adult.stats$med, na.rm = T)
+range(adult.stats$sd, na.rm = T)
+```
+
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+ggsave(here('results', 'manuscript', '1',
+            paste0(plotID, '_B_Richness by subject, 5,000 read rarefaction.pdf')),
+       height = 4, width = 6)
+```
+
+## Comparison to HEI
+
+
+
+### Adult-1
+
+### Adult-2
