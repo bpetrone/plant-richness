@@ -1,0 +1,148 @@
+---
+title: "Adult-1, Adult-2 diet survey data"
+output: html_notebook
+---
+
+# Setup
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(here)
+library(tidyverse)
+```
+
+# Read in data
+
+## Subject metadata
+
+### Adult-1
+
+```{r}
+
+```
+
+
+### Adult-2
+
+```{r}
+
+```
+
+
+## ASA24
+
+### Adult-1
+
+### Adult-2
+
+## DHQ3
+
+### Adult-1
+
+```{r}
+ffq.adult1 <- 
+     here('data', 
+          'processed', 
+          'Adult-1', 
+          'DHQ3.csv') %>% 
+     read_csv()
+
+head(ffq.adult1)
+```
+
+### Adult-2
+
+```{r}
+ffq.adult2 <- 
+     here('data', 
+          'processed', 
+          'Adult-2', 
+          'DHQ3.csv') %>% 
+     read_csv()
+
+head(ffq.adult2)
+```
+
+# Pre-process
+
+```{r}
+# Join together
+ffq <- bind_rows(ffq.adult1, ffq.adult2)
+rm(ffq.adult1, ffq.adult2)
+```
+
+## Tidy
+
+```{r}
+# Remove un-needed columns (metadata, supplements)
+ffq <- select(ffq, 
+              -c(`Record Number`,
+                 starts_with('SUPP'))
+              )
+```
+
+
+```{r}
+# Re-code sex
+ffq <- 
+     ffq %>% 
+     rename(sex = `Sex (1=male; 2=female)`) %>% 
+     mutate(sex = factor(sex,
+                         labels = c('Male', 'Female')))
+```
+
+## QC and filter
+
+From DHQ3 website:
+There are no data cleaning or exclusion programs built into the software. Researchers can decide, based on break offs, energy, or other considerations, which respondents to exclude from analyses. Different investigators clean data in different ways: some like calorie exclusions, some like exclusions based on percentile cutpoints of nutrients or missing data, some like to transform data and then exclude, others want to exclude those respondents who did not take the task seriously (however that is defined). By looking at output files, one can write a program to check issues related to whether an individual always checks the same frequency or portion size. It is our experience that it is difficult to discern these types of errors from energy exclusions. FFQ data can be messy for some respondents and prone to measurement error for all.
+
+Filtering criteria from Asnicar:
+"Submitted FFQs were excluded if more than 10 food items were left unanswered or if the total energy intake estimate derived from the FFQ as a ratio of the participant’s estimated basal metabolic rate (determined by the Harris–Benedict equation) was more than 2 s.d. outside the mean of this ratio (<0.52 or >2.58)."
+This is for a Harvard FFQ.
+
+```{r}
+# TODO: Exclude any subjects based on low calorie intakes??
+```
+
+## Normalize to kcal intake
+
+```{r}
+# Get columns to normalize
+names(ffq)
+```
+
+```{r}
+norm.cols <- 
+     ffq %>% 
+     select(`*Gluten (g)`:`Alcohol drinks`) %>% 
+     names()
+```
+
+```{r}
+# Calculate estimate of amount per 1000 kcal
+ffq <- 
+     ffq %>% 
+     mutate(across(one_of(norm.cols),
+                   ~ .x/`Energy (kcal)`*1000,
+                   .names = '{.col}_per_1000kcal'
+                   )
+     )
+```
+
+## Save
+
+```{r}
+write_csv(
+     ffq,
+     here('data', 
+          'processed',
+          'DHQ3', 
+          'Adult-1 and Adult-2 FFQ with per-1000-kcal calculated nutrients.csv'
+          )
+)
+```
+
