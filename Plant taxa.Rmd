@@ -13,10 +13,12 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 ```{r, include=FALSE, echo=FALSE}
 library(here)
 library(phyloseq)
+library(MButils) # For lowest level naming
 library(metacoder)
 library(RColorBrewer)
 library(tidyverse)
 library(vegan)
+library(UpSetR)
 ```
 
 # Read in data
@@ -47,28 +49,40 @@ tax_table(ps) <- tax_table(as.matrix(taxtab))
 ## Filter
 
 ```{r}
-# Remove any taxon seen with 3 or fewer counts in a sample
-asvtab <- ps@otu_table@.Data
-asvtab[asvtab <= 3] <- 0
-
-# Replace in phyloseq object
-otu_table(ps) <- otu_table(asvtab,
-                           taxa_are_rows = FALSE)
+# # Remove any taxon seen with 3 or fewer counts in a sample
+# asvtab <- ps@otu_table@.Data
+# asvtab[asvtab <= 3] <- 0
+# 
+# # Replace in phyloseq object
+# otu_table(ps) <- otu_table(asvtab,
+#                            taxa_are_rows = FALSE)
 ```
+
+# Count taxa
+
+```{r}
+taxtab <- data.frame(ps@tax_table)
+```
+
+```{r}
+# Number of taxa detected
+dim(taxtab)[1]
+```
+
+```{r}
+# Number of taxa per phylogenetic category
+apply(taxtab, 2, function(x){n_distinct(x)})
+```
+
 
 # Visualize taxa
 
 ## Metacoder tree
 
+### All samples
 ```{r}
 # Convert phyloseq object to taxmap
 x <- parse_phyloseq(ps)
-```
-
-Helpful functions for accessing data
-```{r}
-taxon_names(x) %>% head() # Taxa names
-taxon_ranks(x) %>% head() # Taxa ranks
 ```
 
 377 taxa, and 117 terminal nodes
@@ -78,7 +92,8 @@ Okay!  So calc_taxon_abund converts "per-observation counts (e.g. OTU counts) to
 # 1. calc_taxon_abund
 # 2. counts_to_presence
 
-x$data$tax_abund <- calc_taxon_abund(x, 'otu_table')
+x$data$tax_abund <- calc_taxon_abund(x, 
+                                     'otu_table')
 
 dim(x$data$tax_abund)
 
@@ -98,21 +113,197 @@ x$data$tax_occ <-
 ```
 
 ```{r}
-# Plot heat tree based on presence-absence data
+# Plot heat tree based on presence-absence data (base plot -- no group color)
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 
-gradient <- brewer.pal(9, 'YlOrRd')
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_A_n samples detected, size.pdf')),
+         height = 10, width = 10)
+
+pal <- brewer.pal(9, 'Greens')
 
 heat_tree(
      x,
      node_label = taxon_names,
-     node_size = n_samples,
      node_color = n_samples,
+     node_color_range = pal[1:7],
+     node_size = n_samples,
+     node_size_range = c(0.005, 0.025),
      node_legend_title = element_blank(),
-     node_color_axis_label = 'Samples (n)',
-     node_color_range = c(first(gradient), last(gradient)),
-     output_file = here('results', 'manuscript', '1', 
-          paste0(plotID, '_A_n samples detected, size and color.pdf'))
+     node_color_axis_label = 'Samples (n)'
 )
 ```
 
+Now, try with group color
+Need to re-make data structure.
+
+```{r}
+# Following tutorial https://github.com/grunwaldlab/metacoder/issues/267: 
+# 1. calc_taxon_abund
+# 2. counts_to_presence
+
+x$data$tax_abund <- calc_taxon_abund(x, 
+                                     'otu_table',
+                                     groups = x$data$sample_data$study)
+
+dim(x$data$tax_abund)
+
+# Convert to presence-absence
+x$data$tax_abund <- counts_to_presence(x, 'tax_abund')
+x$data$tax_abund
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_A_detected (Adolescent).pdf')),
+         height = 10, width = 10)
+
+# Detected
+heat_tree(x, 
+          node_size_range = c(0.01, 0.01),
+          node_color = ifelse(Adolescent, "red", "grey"))
+
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_A_not detected (Adolescent).pdf')),
+         height = 10, width = 10)
+
+# Not detected
+heat_tree(x, 
+          node_size_range = c(0.01, 0.01),
+          node_color = ifelse(Adolescent, "grey", "red"))
+```
+Color argument "accepts a vector, the same length taxon_id or a factor of its length."
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_A_detected (Adult-1).pdf')),
+         height = 10, width = 10)
+
+# Detected
+heat_tree(x, 
+          node_size_range = c(0.01, 0.01),
+          node_color = ifelse(x$data$tax_abund$`Adult-1`, "red", "grey"))
+
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_A_not detected (Adult-1).pdf')),
+         height = 10, width = 10)
+
+# Not detected
+heat_tree(x, 
+          node_size_range = c(0.01, 0.01),
+          node_color = ifelse(x$data$tax_abund$`Adult-1`, "grey", "red"))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+# Detected
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_A_detected (Adult-2).pdf')),
+         height = 10, width = 10)
+
+heat_tree(x, 
+          node_size_range = c(0.01, 0.01),
+          node_color = ifelse(x$data$tax_abund$`Adult-2`, "red", "grey"))
+
+# Not detected
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_A_not detected (Adult-2).pdf')),
+         height = 10, width = 10)
+
+heat_tree(x, 
+          node_size_range = c(0.01, 0.01),
+          node_color = ifelse(x$data$tax_abund$`Adult-2`, "grey", "red"))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+# Detected
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_A_detected (Weight Loss).pdf')),
+         height = 10, width = 10)
+
+heat_tree(x, 
+          node_size_range = c(0.01, 0.01),
+          node_color = ifelse(x$data$tax_abund$`Weight Loss`, "red", "grey"))
+
+# Not detected
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_A_not detected (Weight Loss).pdf')),
+         height = 10, width = 10)
+
+heat_tree(x, 
+          node_size_range = c(0.01, 0.01),
+          node_color = ifelse(x$data$tax_abund$`Weight Loss`, "grey", "red"))
+```
+
+## UpSet plot
+
+```{r}
+# Update taxa names to their lowest specified level
+all(taxa_names(ps) == row.names(taxtab)) 
+taxa_names(ps) <- lowest_level(taxtab)$name
+```
+
+```{r}
+adult1.taxa <- 
+     ps %>% 
+     subset_samples(study == 'Adult-1') %>% 
+     prune_taxa(taxa_sums(.) > 0, .) %>% 
+     taxa_names()
+
+adult2.taxa <- 
+     ps %>% 
+     subset_samples(study == 'Adult-2') %>% 
+     prune_taxa(taxa_sums(.) > 0, .) %>% 
+     taxa_names()
+
+weightloss.taxa <- 
+     ps %>% 
+     subset_samples(study == 'Weight Loss') %>% 
+     prune_taxa(taxa_sums(.) > 0, .) %>% 
+     taxa_names()
+
+adolescent.taxa <- 
+     ps %>% 
+     subset_samples(study == 'Adolescent') %>% 
+     prune_taxa(taxa_sums(.) > 0, .) %>% 
+     taxa_names()
+```
+
+```{r}
+# How many detected in each?
+length(weightloss.taxa)
+length(adult1.taxa)
+length(adult2.taxa)
+length(adolescent.taxa)
+```
+
+```{r}
+# Check names equal count above
+union(weightloss.taxa, adult1.taxa) %>% 
+     union(adult2.taxa) %>% 
+     union(adolescent.taxa) %>% 
+     length()
+```
+
+```{r}
+# How many *not* detected in each?
+118 - length(weightloss.taxa)
+118 - length(adult1.taxa)
+118 - length(adult2.taxa)
+118 - length(adolescent.taxa)
+```
+
+```{r}
+# Summarize phyloseq by cohort
+listInput <- list(`Weight Loss` = weightloss.taxa,
+                  `Adult-1` = adult1.taxa,
+                  `Adult-2` = adult2.taxa,
+                  `Adolescent` = adolescent.taxa)
+
+upset(fromList(listInput), order.by = 'freq')
+```
