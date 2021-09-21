@@ -1,5 +1,5 @@
 ---
-title: "Figure 2 (Adult-1, Adult-2)"
+title: "Adult-1, Adult-2 diversity indices"
 output: html_notebook
 ---
 
@@ -41,13 +41,33 @@ rare.df <-
 
 rare.df
 ```
+## Cumulative richness estimates
+
+```{r}
+cumulative.df <- 
+     here('data',
+          'processed',
+          'accumulation',
+          'Adult-1 and Adult-2 cumulative taxon counts.csv') %>% 
+     read_csv()
+```
+
 ## Diet surveys
 
 ### ASA24
 
-### DHQ3
-
-## Diet surveys
+```{r}
+# CHOMP-only food counts
+recall <- 
+     here('..',
+          'chomp',
+          'data', 
+          'processed',
+          'ASA24', 
+          'Food_Tree',
+          'richness_ASA24.rds') %>% 
+     readRDS()
+```
 
 ### DHQ3
 
@@ -64,6 +84,19 @@ ffq.adult1 <-
 head(ffq.adult1)
 ```
 
+##### PDI
+
+```{r}
+pdi.adult1 <-
+     here('data', 
+          'processed', 
+          'Adult-1', 
+          'PDI scores by subject.csv') %>% 
+     read_csv()
+
+head(pdi.adult1)
+```
+
 #### Adult-2
 
 ```{r}
@@ -77,6 +110,27 @@ ffq.adult2 <-
 head(ffq.adult2)
 ```
 
+##### PDI
+
+```{r}
+pdi.adult2 <-
+     here('data', 
+          'processed', 
+          'Adult-2', 
+          'PDI scores by subject.csv') %>% 
+     read_csv()
+
+head(pdi.adult2)
+```
+
+```{r}
+# Join together
+ffq <- bind_rows(ffq.adult1, ffq.adult2)
+pdi <- bind_rows(pdi.adult1, pdi.adult2)
+
+rm(ffq.adult1, ffq.adult2,
+   pdi.adult1, pdi.adult2)
+```
 
 # Pre-process
 
@@ -92,21 +146,65 @@ ps <-
 ps
 ```
 
+```{r}
+alpha <- 
+     rare.df %>% 
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     select(name, study, subj, CH_week, ONR_day, starts_with('obs'))
+```
+
+```{r}
+# Add in full set of observations and Shannon diversity, including samples with fewer than read count threshold
+add <- 
+     estimate_richness(ps, 
+                       measures = c('Observed',
+                                    'Shannon')) %>% 
+     rownames_to_column(var = 'name') %>% 
+     mutate(name = gsub('\\.', '-', name)) %>%  # Correct '.' to '-' substitution
+     rename(obs = Observed)
+
+# Populate with sample data
+add <- 
+     ps@sam_data %>%
+     data.frame() %>% 
+     rownames_to_column(var = 'row') %>% 
+     select(row, study, subj, CH_week, ONR_day) %>% 
+     right_join(add, by = c('row' = 'name')) %>% 
+     rename(name = row)
+
+alpha <- 
+     full_join(alpha,
+               add)
+```
+
 ## Diet surveys
 
-Pull subject ID and any columns relevant to HEI.
+### ASA24
+
+```{r}
+recall
+```
+
+### DHQ3
+
+```{r}
+range(ffq$`Energy (kcal)`, na.rm = TRUE)
+```
+
+
+```{r}
+# Crude quality filter
+ffq <- filter(ffq, 
+              !(`Energy (kcal)` < 500 | `Energy (kcal)` > 4000))
+```
 
 ```{r}
 ffq <- select(ffq, 
-              subj, 
-              age = Age,
+              subj,
               sex = `Sex (1=male; 2=female)`, 
               matches('HEI'))
 names(ffq)
 ```
-
-I am assuming here that total vegetables, total fruits, and total whole grains are non-overlapping and include the other listed plant categories, but I am not certain. 
-Tally these up independently, and also tally all plant categories for comparison.
 
 ```{r}
 ffq <- 
@@ -118,87 +216,27 @@ ffq <-
             hei_wholefruits = 'HEI-2015 - Whole Fruits - Component Score',
             hei_grain = 'HEI-2015 - Whole Grains - Component Score') %>% 
      # Make custom plant column
-     mutate(hei_plant_uniq = hei_veg + hei_fruit + hei_grain,
-            hei_plant_all = hei_veg + hei_greensbeans + hei_fruit + 
-                 hei_wholefruits + hei_grain)
+     mutate(hei_plant_all = hei_veg + hei_greensbeans + hei_fruit + 
+                 hei_wholefruits + hei_grain,
+            hei_non_plant = hei_tot - hei_plant_all)
 
 ffq
 ```
-
-
 # Analyze
 
 ```{r}
 samdf <- data.frame(ps@sam_data)
 ```
 
-
-## Read depth
-
-```{r}
-range(sample_data(ps)$reads_food)
-```
-
-```{r}
-# Have I appropriately preserved failed samples in the phyloseq object?
-# TODO: Check this in ONR and CHOMP runs
-any(sample_sums(ps) == 0)
-```
-
-```{r}
-median(sample_data(ps)$reads_food)
-```
-
-```{r}
-sd(sample_data(ps)$reads_food)
-```
-
-### Read count histograms
-
-```{r}
-hist(sample_data(ps)$reads_food)
-```
-
-```{r}
-# Faceted by study
-ggplot(samdf, aes(x = reads_food, fill = study)) +
-     geom_histogram(binwidth = 10000, boundary = 0) +
-     facet_wrap(~study) +
-     scale_fill_manual(values = c('gray80', 'gray40')) +
-     # xlim(0, 50000) +
-     labs(x = 'Read count (food taxa)', y = 'Samples (n)') +
-     theme_bw() +
-     theme(axis.text.x = element_text(angle = 20, hjust = 1),
-           legend.title = element_blank(),
-           legend.position = 'none')
-```
-
-### Rarefaction curves
-
-#### Stats
-
-```{r}
-# Number of dropped samples
-sum(sample_sums(ps) < 10500)
-```
-
-```{r}
-# Percentage
-# Number of dropped samples
-sum(sample_sums(ps) < 10500)/nsamples(ps) * 100
-```
-
 ## Richness by participant
-
-## By subject 
 
 ```{r}
 # Refactor subject IDs in order of descending median taxa observations
 alpha.stats <- 
      alpha %>% 
      group_by(subj) %>% 
-     summarize(med = median(obs_rare_10500, na.rm = TRUE), 
-               sd = sd(obs_rare_10500, na.rm = TRUE)) %>% 
+     summarize(med = median(obs_rare, na.rm = TRUE), 
+               sd = sd(obs_rare, na.rm = TRUE)) %>% 
      arrange(desc(med))
 
 alpha$subj <- factor(alpha$subj, levels = alpha.stats$subj)
@@ -206,72 +244,1221 @@ alpha$subj <- factor(alpha$subj, levels = alpha.stats$subj)
 
 ```{r}
 alpha %>% 
-     ggplot(aes(x = subj, y = obs_rare_10500)) +
+     ggplot(aes(x = subj, y = obs_rare, color = study)) +
+     # facet_wrap(~study, scales = 'free_x') +
      geom_boxplot() +
-     facet_wrap(~study, scales = 'free_x') +
-     labs(x = 'Participant') +
-     theme_bw() +
+     labs(x = 'Participant', y = '*trnL* richness') +
+     scale_color_manual(values = c('black', 'gray60')) +
+     theme_classic() +
      theme(
           axis.text.x = element_blank(),
-          axis.ticks.x = element_blank(), 
-          panel.grid.major.x = element_blank()
+          axis.ticks.x = element_blank(),
+          axis.title = element_text(size = 14),
+          axis.title.y = ggtext::element_markdown(),
+          legend.position = c(0.9, 0.9),
+          legend.title = element_blank(),
+          legend.text = element_text(size = 12)
      )
 ```
-
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 'miniseq', 'Combined', 'alpha diversity',
-            paste0(plotID, '_Alpha diversity by study, raw.pdf')),
-       height = 3, width = 5)
-```
-
-```{r}
-alpha %>% 
-     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
-     ggplot(aes(x = subj, y = obs_rare_10500, fill = study)) +
-     geom_boxplot() +
-     # facet_wrap(~study, scales = 'free_x') +
-     labs(x = 'Participant', y = 'trnL richness') +
-     scale_fill_manual(values = c('gray80', 'gray40')) +
-     theme_bw() +
-     theme(
-          axis.text.x = element_blank(),
-          axis.ticks.x = element_blank(), 
-          panel.grid.major.x = element_blank(),
-          legend.position = c(0.9,0.8),
-          legend.background = element_rect(color = 'black'),
-          legend.title = element_blank()
-     )
+# ggsave(here('results', 'manuscript', '2',
+#             paste0(plotID, '_A_trnL richness by participant.pdf')),
+#        height = 3, width = 9)
 ```
 
 ```{r}
 adult.stats <- 
      alpha %>% 
-     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
      group_by(subj) %>% 
-     summarize(med = median(obs_rare_10500,
+     summarize(med = median(obs_rare,
                             na.rm = TRUE),
-               sd = sd(obs_rare_10500,
-                       na.rm = TRUE))
+               mean = mean(obs_rare,
+                           na.rm = TRUE),
+               sd = sd(obs_rare,
+                       na.rm = TRUE),
+               var = var(obs_rare,
+                         na.rm = TRUE))
 
 range(adult.stats$med, na.rm = T)
 range(adult.stats$sd, na.rm = T)
 ```
 
+### Mean vs. variance
+
+```{r}
+# Add cohort information in order to calculate separately
+adult.stats <- 
+     samdf %>% 
+     select(subj, study) %>% 
+     right_join(adult.stats) %>% 
+     distinct()
+```
+
+
+```{r}
+# Adult-1
+adult.stats %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean + var,
+              data = ., 
+              method = 'spearman')
+```
+
+```{r}
+# Adult-2
+adult.stats %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean + var,
+              data = ., 
+              method = 'spearman')
+```
+
+```{r}
+# Average trnL richness within each subject
+alpha.mean <-
+     alpha %>% 
+     group_by(study, subj) %>% 
+     summarize(mean = mean(obs),
+               mean_shannon = mean(Shannon),
+               mean_rare = mean(obs_rare, na.rm = TRUE)) %>% 
+     ungroup()
+```
+
+```{r}
+# How well do these numbers correlate, now that there are different numbers of observations?
+ggplot(alpha.mean, aes(x = mean, y = mean_rare)) +
+     geom_abline(slope = 1,
+                 intercept = 0, 
+                 color = 'gray80',
+                 linetype = 'dashed') +
+     geom_point() +
+     coord_equal() +
+     labs(x = 'Mean *trnL* richness<br>\n(All samples)', 
+          y = 'Mean rarefied *trnL* richness<br>(>10,500 reads)') +
+     xlim(0, 40) + ylim(0, 40) +
+     theme_classic() +
+     theme(axis.title.x = ggtext::element_markdown(),
+           axis.title.y = ggtext::element_markdown())
+```
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-
-ggsave(here('results', 'manuscript', '1',
-            paste0(plotID, '_B_Richness by subject, 5,000 read rarefaction.pdf')),
-       height = 4, width = 6)
+# ggsave(here('results', 
+#             'manuscript',
+#             'supplemental',
+#             paste0(plotID, '_rarefied vs observed trnL richness (mean).pdf')),
+#        height = 4, width = 4)
 ```
 
-## Comparison to HEI
+```{r}
+# Average trnL richness within each subject
+alpha.median <-
+     alpha %>% 
+     group_by(study, subj) %>% 
+     summarize(median = median(obs, na.rm = TRUE),
+               median_rare = median(obs_rare, na.rm = TRUE)) %>% 
+     ungroup()
+```
 
+```{r}
+# How well do these numbers correlate, now that there are different numbers of observations?
+ggplot(alpha.median, aes(x = median, y = median_rare)) +
+     geom_abline(slope = 1,
+                 intercept = 0, 
+                 color = 'gray80',
+                 linetype = 'dashed') +
+     geom_point() +
+     coord_equal() +
+     labs(x = 'Median *trnL* richness<br>\n(All samples)', 
+          y = 'Median rarefied *trnL* richness<br>(>10,500 reads)') +
+     xlim(0, 40) + ylim(0, 40) +
+     theme_classic() +
+     theme(axis.title.x = ggtext::element_markdown(),
+           axis.title.y = ggtext::element_markdown())
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results', 
+#             'manuscript',
+#             'supplemental',
+#             paste0(plotID, '_rarefied vs observed trnL richness (median).pdf')),
+#        height = 4, width = 4)
+```
 
+Based on above plots, move forward with mean
+
+## PDI
+
+```{r}
+# Join to PDI data
+pdi <- 
+     alpha.mean %>% 
+     left_join(pdi)
+```
+
+```{r}
+# Make labels plot-friendly
+names(pdi)[names(pdi) == 'pdi'] <- 'PDI'
+names(pdi)[names(pdi) == 'hpdi'] <- 'hPDI'
+names(pdi)[names(pdi) == 'updi'] <- 'uPDI'
+```
+
+```{r}
+# Select relevant columns, get in long form
+pdi.long <- 
+     pdi %>% 
+     select(study:uPDI) %>% 
+     pivot_longer(cols = matches('pdi'),
+                  names_to = 'index', 
+                  values_to = 'value')
+
+pdi.long$index <- factor(pdi.long$index,
+                         levels = c('PDI', 'hPDI', 'uPDI'))
+```
 
 ### Adult-1
 
+```{r}
+pdi.long %>% 
+     filter(study == 'Adult-1') %>% 
+     ggplot(aes(x = mean, y = value)) +
+     geom_point() +
+     facet_wrap(~index) +
+     labs(x = 'Mean *trnL* richness',
+          y = 'Dietary index score') +
+     theme_bw() +
+     theme(axis.title.x = ggtext::element_markdown(),
+           axis.title = element_text(size = 14))
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results',
+#             'manuscript',
+#             '2',
+#             paste0(plotID, '_C trnL richness x PDI indices (Adult-1).pdf')),
+#        height = 3, width = 7)
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean + PDI,
+              data = ., 
+              method = 'spearman')
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean + hPDI,
+              data = ., 
+              method = 'spearman')
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean + uPDI,
+              data = ., 
+              method = 'spearman')
+```
+
+
 ### Adult-2
+
+```{r}
+pdi.long %>% 
+     filter(study == 'Adult-2') %>% 
+     ggplot(aes(x = mean, y = value)) +
+     geom_point() +
+     facet_wrap(~index) +
+     labs(x = 'Mean *trnL* richness',
+          y = 'Dietary index score') +
+     theme_bw() +
+     theme(axis.title.x = ggtext::element_markdown(),
+           axis.title = element_text(size = 14))
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results',
+#             'manuscript',
+#             '2',
+#             paste0(plotID, '_C trnL richness x PDI indices (Adult-2).pdf')),
+#        height = 3, width = 7)
+```
+
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean + PDI,
+              data = ., 
+              method = 'spearman')
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean + hPDI,
+              data = ., 
+              method = 'spearman')
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean + uPDI,
+              data = ., 
+              method = 'spearman')
+```
+
+
+## HEI
+
+```{r}
+# Join to FFQ data
+ffq <- 
+     alpha.mean %>% 
+     left_join(ffq)
+```
+
+```{r}
+# How many subjects are missing DHQ3 data?
+ffq %>% 
+     select(starts_with(c('HEI', 'hei'))) %>% 
+     apply(1, function(x){all(is.na(x))}) %>% 
+     sum()
+```
+
+This is 5 at baseline, and 9 with crude calorie filter.
+
+### Visualizations (joint)
+
+```{r}
+ggplot(ffq, aes(x = mean, y = hei_tot)) +
+     geom_point(alpha = 0.8, size = 2) +
+     facet_wrap(~study) +
+     labs(x = 'Mean *trnL* richness', 
+          y = 'HEI-2015\nplant components score') +
+     theme_bw() +
+     theme(axis.title = element_text(size = 14),
+           axis.title.x = ggtext::element_markdown())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            '2',
+            paste0(plotID, '_B trnL richness x HEI plant.pdf')),
+       height = 3, width = 7)
+```
+
+```{r}
+ggplot(ffq, aes(x = mean_rare, y = hei_plant_all)) +
+     geom_point() +
+     facet_wrap(~study) +
+     labs(x = 'Mean rarefied *trnL* richness', 
+          y = 'HEI-2015 plant components score') +
+     theme_bw() +
+     theme(axis.title = element_text(size = 14),
+           axis.title.x = ggtext::element_markdown())
+```
+
+```{r}
+ggplot(ffq, aes(x = mean_shannon, y = hei_plant_all)) +
+     geom_point(alpha = 0.8, size = 2) +
+     facet_wrap(~study) +
+     labs(x = 'Mean *trnL* Shannon diversity', 
+          y = 'HEI-2015\nplant components score') +
+     theme_bw() +
+     theme(axis.title = element_text(size = 14),
+           axis.title.x = ggtext::element_markdown())
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            'supplemental',
+            paste0(plotID, '_trnL Shannon div x HEI plant.pdf')),
+       height = 3, width = 7)
+```
+
+### Adult-1
+
+#### Total
+
+```{r}
+ffq %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean + hei_tot,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+```{r}
+ffq %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean_shannon + hei_tot,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+```{r}
+ffq %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean_rare + hei_tot,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+#### Plant only
+
+```{r}
+# Stats
+ffq %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean + hei_plant_all,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+```{r}
+# Stats
+ffq %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean_shannon + hei_plant_all,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+```{r}
+# Stats
+ffq %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean_rare + hei_plant_all,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+### Adult-2
+
+#### Total
+
+```{r}
+ffq %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean + hei_tot,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+```{r}
+ffq %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean_shannon + hei_tot,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+```{r}
+ffq %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean_rare + hei_tot,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+#### Plant only
+
+```{r}
+# Stats
+ffq %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean + hei_plant_all,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+```{r}
+ffq %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean_shannon + hei_plant_all,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+```{r}
+# Stats
+ffq %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean_rare + hei_plant_all,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+## Combined 
+
+```{r}
+cor.test(ffq$mean, ffq$hei_plant_all,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+```{r}
+cor.test(ffq$mean_shannon, ffq$hei_plant_all,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+```{r}
+cor.test(ffq$mean_rare, ffq$hei_plant_all,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+## Sampling scheme
+
+### Adult-1
+
+```{r}
+# Get sample data for Adult-2
+samdf <- 
+     data.frame(ps@sam_data) %>% 
+     rownames_to_column(var = 'row') %>% 
+     filter(study == 'Adult-1')
+```
+
+```{r}
+# For storing results
+results.df <- data.frame(
+     scheme = NULL, 
+     study = NULL,
+     rho = NULL,
+     p = NULL)
+```
+
+Note that this will cover duplicated sample sets as i gets closer to 6, but can detect and remove them downstream.
+```{r}
+# Do scheme 1 first: Randomly sample i samples from each participant
+set.seed(6302021)
+
+for (i in 1:18){ # Number of samples
+     for (iter in (1:100)){
+          # Make subsampled, merged phyloseq
+          samples <- 
+               samdf %>% 
+               group_by(subj) %>% 
+               slice_sample(n = i) %>% 
+               pull(row)
+          
+          ps.temp <- prune_samples(samples, ps)
+          
+          # Calculate alpha diversity
+          # Common warning here when there are few singletons in the data (only
+          # a handful of samples)
+          suppressWarnings(alpha <- 
+                                estimate_richness(ps.temp, 
+                                                  measures = c('Observed')) %>% 
+                                rownames_to_column(var = 'row') %>% 
+                                # Correct '.' to '-' in sample name
+                                mutate(row = gsub('\\.', '-', row)) %>% 
+                                # Join to full sample data
+                                left_join(samdf) %>% 
+                                select(row, study, subj, obs = Observed)) 
+          
+          # Average alpha diversity results within each participant, and join to 
+          # FFQ data
+          ffq.temp <- 
+               alpha %>% 
+               group_by(subj) %>% 
+               summarize(obs_mean = mean(obs)) %>% 
+               left_join(ffq)
+          
+          # Calculate correlation by study
+          spearman <- cor.test(ffq.temp$obs_mean, ffq.temp$hei_plant_all,
+                               alternative = 'greater',
+                               method = 'spearman')
+          
+          # Update results dataframe
+          row <- c(i, 
+                   'Adult-1', 
+                   spearman$estimate, 
+                   spearman$p.value)
+          names(row) <- c('scheme', 'study', 'rho', 'p')
+          results.df <- bind_rows(results.df, row)
+     }
+}
+```
+
+```{r}
+# Remove duplicates
+dim(results.df)
+results.df <- distinct(results.df)
+dim(results.df) 
+```
+
+```{r}
+cols = c('scheme', 'rho', 'p')
+results.df <- 
+     mutate(results.df,
+            across(one_of(cols),
+            ~ as.numeric(.x)))
+```
+
+```{r}
+# How many in each category?
+table(results.df$scheme)
+```
+
+```{r}
+# Intercept: get from full dataset
+y <- results.df$rho[results.df$scheme == 18]
+```
+
+```{r}
+# Plot
+results.df %>% 
+     filter(scheme %in% seq(3, 18, 3)) %>% 
+     ggplot(aes(x = scheme, y = rho, group = scheme)) +
+     geom_boxplot() +
+     geom_hline(yintercept = y, 
+                linetype = 'dotted',
+                color = 'palegreen3',
+                size = 1.5) +
+     scale_x_continuous(breaks = seq(3, 18, 3)) +
+     labs(y = 'Spearman *rho*', x = 'Samples (n)') +
+     theme_classic() +
+     theme(
+          axis.title = element_text(size = 14), 
+          axis.title.y = ggtext::element_markdown())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '3',
+            paste0(plotID, '_Adult-1 trnL x HEI correlations by sampling scheme, rho.pdf')),
+       height = 4, width = 3)
+```
+
+```{r}
+# Plot
+results.df %>% 
+     filter(scheme %in% seq(3, 18, 3)) %>% 
+     ggplot(aes(x = scheme, y = p, group = scheme)) +
+     geom_boxplot() +
+     geom_hline(yintercept = 0.05, 
+                linetype = 'dotted',
+                color = 'tomato3',
+                size = 1.5) +
+     scale_x_continuous(breaks = seq(3, 18, 3)) +
+     labs(y = 'Spearman p-value', x = 'Samples (n)') +
+     theme_classic() +
+     theme(
+          axis.title = element_text(size = 14),
+          axis.title.y = ggtext::element_markdown())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '3',
+            paste0(plotID, '_Adult-1 trnL x HEI correlations by sampling scheme, p.pdf')),
+       height = 4, width = 3)
+```
+
+#### Restrict to separate weeks
+
+```{r}
+# For storing results
+results.df <- data.frame(
+     scheme = NULL, 
+     study = NULL,
+     rho = NULL,
+     p = NULL)
+```
+
+```{r}
+# Do scheme 1 first: Randomly sample i samples from each participant
+set.seed(6202021)
+
+for (i in 1:6){ # Number of samples (only from separate weeks)
+     for (iter in (1:100)){
+          # Make subsampled, merged phyloseq
+          samples <- 
+               samdf %>% 
+               group_by(subj, CH_week) %>% 
+               slice_sample(n = 1) %>% # Pick one sample from each week at random
+               ungroup() %>% 
+               group_by(subj) %>% # 6 random weekly samples
+               slice_sample(n = i) %>% # Pick i weeks' worth of samples
+               pull(row)
+          
+          ps.temp <- prune_samples(samples, ps)
+          
+          # Calculate alpha diversity
+          # Common warning here when there are few singletons in the data (only
+          # a handful of samples)
+          suppressWarnings(alpha <- 
+                                estimate_richness(ps.temp, 
+                                                  measures = c('Observed')) %>% 
+                                rownames_to_column(var = 'row') %>% 
+                                # Correct '.' to '-' in sample name
+                                mutate(row = gsub('\\.', '-', row)) %>% 
+                                # Join to full sample data
+                                left_join(samdf) %>% 
+                                select(row, study, subj, obs = Observed)) 
+          
+          # Average alpha diversity results within each participant, and join to 
+          # FFQ data
+          ffq.temp <- 
+               alpha %>% 
+               group_by(subj) %>% 
+               summarize(obs_mean = mean(obs)) %>% 
+               left_join(ffq)
+          
+          # Calculate correlation by study
+          spearman <- cor.test(ffq.temp$obs_mean, ffq.temp$hei_plant_all,
+                               alternative = 'greater',
+                               method = 'spearman')
+          
+          # Update results dataframe
+          row <- c(i, 
+                   'Adult-1', 
+                   spearman$estimate, 
+                   spearman$p.value)
+          names(row) <- c('scheme', 'study', 'rho', 'p')
+          results.df <- bind_rows(results.df, row)
+     }
+}
+```
+
+```{r}
+# Remove duplicates
+dim(results.df)
+results.df <- distinct(results.df)
+dim(results.df) 
+```
+
+```{r}
+cols = c('scheme', 'rho', 'p')
+results.df <- 
+     mutate(results.df,
+            across(one_of(cols),
+            ~ as.numeric(.x)))
+```
+
+```{r}
+# How many in each category?
+table(results.df$scheme)
+```
+Note that 1,000 iterations saturates this measure, and gives a similar result to 1000. 
+```{r}
+# Plot
+ggplot(results.df, aes(x = scheme, y = rho, group = scheme)) +
+     geom_boxplot() +
+     geom_hline(yintercept = 0.4, # Hard-coded from prior result 
+                linetype = 'dotted',
+                color = 'palegreen3',
+                size = 1.5) +
+     scale_x_continuous(breaks = 1:6) +
+     labs(y = 'Spearman *rho*', x = 'Samples (n)') +
+     theme_classic() +
+     theme(
+          axis.title = element_text(size = 14), 
+          axis.title.y = ggtext::element_markdown())
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            'supplemental',
+            paste0(plotID, '_Adult-1 trnL x HEI correlations restricted to 1 random sample per week, rho.pdf')),
+       height = 4, width = 3)
+```
+
+```{r}
+# Plot
+ggplot(results.df, aes(x = scheme, y = p, group = scheme)) +
+     geom_boxplot() +
+     geom_hline(yintercept = 0.05, 
+                linetype = 'dotted',
+                color = 'tomato3',
+                size = 1.5) +
+     scale_x_continuous(breaks = 1:6) +
+     labs(y = 'Spearman p-value', x = 'Samples (n)') +
+     theme_classic() +
+     theme(
+          axis.title = element_text(size = 14),
+          axis.title.y = ggtext::element_markdown())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            'supplemental',
+            paste0(plotID, '_Adult-1 trnL x HEI correlations restricted to 1 random sample per week, p.pdf')),
+       height = 4, width = 3)
+```
+
+### Adult-2
+
+```{r}
+# Get sample data for Adult-2
+samdf <- 
+     data.frame(ps@sam_data) %>% 
+     rownames_to_column(var = 'row') %>% 
+     filter(study == 'Adult-2')
+```
+
+```{r}
+# For storing results
+results.df <- data.frame(
+     scheme = NULL, 
+     study = NULL,
+     rho = NULL,
+     p = NULL)
+```
+
+Note that this will cover duplicated sample sets as i gets closer to 6, but can detect and remove them downstream.
+```{r}
+# Do scheme 1 first: Randomly sample i samples from each participant
+set.seed(6302021)
+
+for (i in 1:6){ # Number of samples
+     for (iter in (1:100)){
+          # Make subsampled, merged phyloseq
+          samples <- 
+               samdf %>% 
+               group_by(subj) %>% 
+               slice_sample(n = i) %>% 
+               pull(row)
+          
+          ps.temp <- prune_samples(samples, ps)
+          
+          # Calculate alpha diversity
+          # Common warning here when there are few singletons in the data (only
+          # a handful of samples)
+          suppressWarnings(alpha <- 
+                                estimate_richness(ps.temp, 
+                                                  measures = c('Observed')) %>% 
+                                rownames_to_column(var = 'row') %>% 
+                                # Correct '.' to '-' in sample name
+                                mutate(row = gsub('\\.', '-', row)) %>% 
+                                # Join to full sample data
+                                left_join(samdf) %>% 
+                                select(row, study, subj, obs = Observed)) 
+          
+          # Average alpha diversity results within each participant, and join to 
+          # FFQ data
+          ffq.temp <- 
+               alpha %>% 
+               group_by(subj) %>% 
+               summarize(obs_mean = mean(obs)) %>% 
+               left_join(ffq)
+          
+          # Calculate correlation by study
+          spearman <- cor.test(ffq.temp$obs_mean, ffq.temp$hei_plant_all,
+                               alternative = 'greater',
+                               method = 'spearman')
+          
+          # Update results dataframe
+          row <- c(i, 
+                   'Adult-2', 
+                   spearman$estimate, 
+                   spearman$p.value)
+          names(row) <- c('scheme', 'study', 'rho', 'p')
+          results.df <- bind_rows(results.df, row)
+     }
+}
+```
+
+```{r}
+# Remove duplicates
+dim(results.df)
+results.df <- distinct(results.df)
+dim(results.df) 
+```
+
+```{r}
+# How many in each category?
+table(results.df$scheme)
+```
+
+```{r}
+cols = c('scheme', 'rho', 'p')
+results.df <- 
+     mutate(results.df,
+            across(one_of(cols),
+            ~ as.numeric(.x)))
+```
+
+```{r}
+# Intercept: get from full dataset
+y <- results.df$rho[results.df$scheme == 6]
+```
+
+```{r}
+# Plot
+ggplot(results.df, aes(x = scheme, y = rho, group = scheme)) +
+     geom_boxplot() +
+     geom_hline(yintercept = y, 
+                linetype = 'dotted',
+                color = 'palegreen3',
+                size = 1.5) +
+     scale_x_continuous(breaks = 1:6) +
+     labs(y = 'Spearman *rho*', x = 'Samples (n)') +
+     theme_classic() +
+     theme(
+          axis.title = element_text(size = 14), 
+          axis.title.y = ggtext::element_markdown())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '3',
+            paste0(plotID, '_Adult-2 trnL x HEI correlations by sampling scheme, rho.pdf')),
+       height = 4, width = 3)
+```
+
+```{r}
+# Plot
+ggplot(results.df, aes(x = scheme, y = p, group = scheme)) +
+     geom_boxplot() +
+     geom_hline(yintercept = 0.05, 
+                linetype = 'dotted',
+                color = 'tomato3',
+                size = 1.5) +
+     scale_x_continuous(breaks = 1:6) +
+     labs(y = 'Spearman p-value', x = 'Samples (n)') +
+     theme_classic() +
+     theme(
+          axis.title = element_text(size = 14),
+          axis.title.y = ggtext::element_markdown())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '3',
+            paste0(plotID, '_Adult-2 trnL x HEI correlations by sampling scheme, p.pdf')),
+       height = 4, width = 3)
+```
+
+#### Restrict to separate weeks
+
+```{r}
+# For storing results
+results.df <- data.frame(
+     scheme = NULL, 
+     study = NULL,
+     rho = NULL,
+     p = NULL)
+```
+
+```{r}
+# Update Adult-2 sample data to have a "week" entry
+samdf <- 
+     mutate(samdf,
+            ONR_week = gsub('T|F', '', ONR_day),
+            ONR_week = as.numeric(ONR_week))
+```
+
+```{r}
+# Do scheme 1 first: Randomly sample i samples from each participant
+set.seed(6202021)
+
+for (i in 1:3){ # Number of samples (only from separate weeks)
+     for (iter in (1:100)){
+          # Make subsampled, merged phyloseq
+          samples <- 
+               samdf %>% 
+               group_by(subj, ONR_week) %>% 
+               slice_sample(n = 1) %>% # Pick one sample from each week at random
+               ungroup() %>% 
+               group_by(subj) %>% # 3 random weekly samples
+               slice_sample(n = i) %>% # Pick i weeks' worth of samples
+               pull(row)
+          
+          ps.temp <- prune_samples(samples, ps)
+          
+          # Calculate alpha diversity
+          # Common warning here when there are few singletons in the data (only
+          # a handful of samples)
+          suppressWarnings(alpha <- 
+                                estimate_richness(ps.temp, 
+                                                  measures = c('Observed')) %>% 
+                                rownames_to_column(var = 'row') %>% 
+                                # Correct '.' to '-' in sample name
+                                mutate(row = gsub('\\.', '-', row)) %>% 
+                                # Join to full sample data
+                                left_join(samdf) %>% 
+                                select(row, study, subj, obs = Observed)) 
+          
+          # Average alpha diversity results within each participant, and join to 
+          # FFQ data
+          ffq.temp <- 
+               alpha %>% 
+               group_by(subj) %>% 
+               summarize(obs_mean = mean(obs)) %>% 
+               left_join(ffq)
+          
+          # Calculate correlation by study
+          spearman <- cor.test(ffq.temp$obs_mean, ffq.temp$hei_plant_all,
+                               alternative = 'greater',
+                               method = 'spearman')
+          
+          # Update results dataframe
+          row <- c(i, 
+                   'Adult-2', 
+                   spearman$estimate, 
+                   spearman$p.value)
+          names(row) <- c('scheme', 'study', 'rho', 'p')
+          results.df <- bind_rows(results.df, row)
+     }
+}
+```
+
+```{r}
+# Remove duplicates
+dim(results.df)
+results.df <- distinct(results.df)
+dim(results.df) 
+```
+
+```{r}
+cols = c('scheme', 'rho', 'p')
+results.df <- 
+     mutate(results.df,
+            across(one_of(cols),
+            ~ as.numeric(.x)))
+```
+
+```{r}
+# How many in each category?
+table(results.df$scheme)
+```
+
+```{r}
+# Plot
+ggplot(results.df, aes(x = scheme, y = rho, group = scheme)) +
+     geom_boxplot() +
+     geom_hline(yintercept = 0.38, # Hard-coded from prior result 
+                linetype = 'dotted',
+                color = 'palegreen3',
+                size = 1.5) +
+     scale_x_continuous(breaks = 1:3) +
+     labs(y = 'Spearman *rho*', x = 'Samples (n)') +
+     theme_classic() +
+     theme(
+          axis.title = element_text(size = 14), 
+          axis.title.y = ggtext::element_markdown())
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            'supplemental',
+            paste0(plotID, '_Adult-2 trnL x HEI correlations restricted to 1 random sample per week, rho.pdf')),
+       height = 4, width = 2)
+```
+
+```{r}
+# Plot
+ggplot(results.df, aes(x = scheme, y = p, group = scheme)) +
+     geom_boxplot() +
+     geom_hline(yintercept = 0.05, 
+                linetype = 'dotted',
+                color = 'tomato3',
+                size = 1.5) +
+     scale_x_continuous(breaks = 1:3) +
+     labs(y = 'Spearman p-value', x = 'Samples (n)') +
+     theme_classic() +
+     theme(
+          axis.title = element_text(size = 14),
+          axis.title.y = ggtext::element_markdown())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            'supplemental',
+            paste0(plotID, '_Adult-2 trnL x HEI correlations restricted to 1 random sample per week, p.pdf')),
+       height = 4, width = 2)
+```
+
+
+```{r}
+for (scheme in c('s2', 's3', 's4', 's5')){ # For each sampling scheme
+     scheme.var <- get(scheme)
+     for (i in seq_along(scheme.var)){ # For each set of samples within that scheme
+          # Make subsampled phyloseq
+          ps.temp <- subset_samples(ps.foods,
+                                    ONR_day %in% scheme.var[[i]])
+          
+          # Calculate alpha diversity
+          # Common warning here when there are few singletons in the data (only
+          # a handful of samples)
+          suppressWarnings(alpha <- 
+               estimate_richness(ps.temp, 
+                                 measures = c('Observed', 
+                                              'Shannon')) %>% 
+               rownames_to_column(var = 'name') %>% 
+               mutate(subj = gsub('_.*$', '', name))) # Get subject ID
+          
+          # Average alpha diversity results within each participant, and join to 
+          # FFQ data
+          ffq.temp <- 
+               alpha %>% 
+               group_by(subj) %>% 
+               summarize(mean_Obs = mean(Observed),
+                         mean_Shannon = mean(Shannon)) %>% 
+               left_join(ffq)
+          
+          # Calculate Pearson correlation
+          pearson <- cor.test(ffq.temp$mean_Shannon, ffq.temp$hei_plant_all,
+                              alternative = 'greater',
+                              method = 'pearson')
+          
+          # Update results dataframe
+          row <- c(scheme, i, pearson$estimate, pearson$p.value)
+          names(row) <- c('scheme', 'i' , 'Pearson_r', 'Pearson_p')
+          results.df <- bind_rows(results.df, row)
+          }
+}
+
+```
+
+Plot results:
+
+```{r}
+# Pivot longer for side-by-side plotting
+results.df <- 
+     pivot_longer(results.df,
+                  cols = starts_with('Pearson'),
+                  names_to = 'measure',
+                  values_to = 'value') %>% 
+     mutate(value = as.numeric(value))
+```
+
+Outliers are throwing off plot limits, and I can't adjust across facets. Just save plots separately and display side-by side.
+
+```{r}
+labels <- c('1 sample',
+            '2 samples,\nconsecutive',
+            '2 samples,\nalternate week',
+            '3 samples,\nconsecutive',
+            '3 samples,\nweekly')
+
+results.df %>% 
+     filter(measure == 'Pearson_p') %>% 
+     ggplot(aes(x = scheme, y = value)) +
+     geom_boxplot(outlier.shape = NA, size = 1.5) +
+     # geom_hline(yintercept = 0.43, size = 1.5, alpha = 0.5,
+     #            color = 'springgreen4', linetype = 'dashed') +
+     geom_hline(yintercept = 0.05, size = 1.5, alpha = 0.5,
+                color = 'red', linetype = 'dashed') +
+     scale_x_discrete(labels = labels) +
+     labs(y = 'Pearson *p*-value') +
+     # labs(y = 'Pearson *r*') +
+     ylim(0, 0.25) +
+     theme_bw() +
+     theme(axis.line = element_line(size = 1.5),
+           axis.ticks = element_line(size = 1.5),
+           axis.text.x = element_text(angle = 30, hjust = 1,
+                                      size = 14, face = 'bold', color = 'gray40'),
+           axis.text.y = element_text(size = 14, face = 'bold', color = 'gray40'),
+           axis.title.x = element_blank(), 
+           axis.title.y = ggtext::element_markdown(size = 18, face = 'bold', 
+                                                   color = 'gray40'))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('..', 'development', 'results', '2021 R01',
+            paste0(plotID, '_trnL x HEI correlations by sampling scheme.png')),
+       height = 5, width = 5)
+```
+
+
+## vs. ASA24
+
+```{r}
+# Concatenate richness measures
+recall.rows <- 
+     select(recall, subj = ID, starts_with('richness')) %>% 
+     pivot_longer(cols = starts_with('richness'),
+                  names_to = 'category',
+                  values_to = 'value') %>% 
+     mutate(category = gsub('richness_', '', category))
+
+trnL.rows <- 
+     rare.df %>% 
+     filter(study == 'Adult-1') %>% 
+     select(subj, value = obs_rare) %>% 
+     mutate(category = 'plant')
+
+recall.rows$measure = '24-hour recall'
+trnL.rows$measure = 'Metabarcoding'
+
+trnL.v.asa <- 
+     bind_rows(recall.rows, trnL.rows)
+```
+
+```{r}
+trnL.v.asa %>% 
+     filter(category == 'plant') %>% 
+     ggplot(aes(x = subj, y = value, color = measure)) +
+     # geom_point()
+     geom_boxplot() +
+     theme_bw() +
+     theme(axis.text.x = element_text(angle = 20, hjust = 1))
+```
+
+```{r}
+# Try averaging within each participant to get one value
+trnL.v.asa.avg <- 
+     trnL.v.asa %>% 
+     filter(category == 'plant') %>% 
+     group_by(measure, subj) %>% 
+     summarize(mean = mean(value)) %>% 
+     pivot_wider(names_from = 'measure',
+                 values_from = 'mean')
+```
+
+```{r}
+ggplot(trnL.v.asa.avg, aes(x = `24-hour recall`, y = Metabarcoding)) +
+     geom_point() +
+     xlim(0, 20) + ylim(0, 20) +
+     coord_equal()
+```
+Consider: haven't filtered data for completeness?
+
+```{r}
+cor.test(trnL.v.asa.avg$`24-hour recall`, 
+         trnL.v.asa.avg$Metabarcoding,
+         method = 'spearman')
+```
+
