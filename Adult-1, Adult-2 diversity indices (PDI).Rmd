@@ -1,0 +1,277 @@
+---
+title: "Adult-1, Adult-2 PDI"
+output: html_notebook
+---
+
+# Setup
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r, include=FALSE, echo=FALSE}
+library(here)
+library(phyloseq)
+library(tidyverse)
+```
+
+# Read in data
+
+## trnL
+
+Note this is already trimmed to only those taxa identified to a food species, with duplicated taxa collapsed.
+```{r}
+# Read in last saved phyloseq
+ps <- 
+     here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds') %>% 
+     readRDS()
+
+ps
+```
+
+### Rarefied richness estimates
+
+```{r}
+rare.df <- 
+     here('data', 
+          'processed', 
+          'rarefaction',
+          'Rarefied trnL counts (10,500 reads).rds') %>% 
+     readRDS
+
+rare.df
+```
+## Cumulative richness estimates
+
+```{r}
+cumulative.df <- 
+     here('data',
+          'processed',
+          'accumulation',
+          'Adult-1 and Adult-2 cumulative taxon counts.csv') %>% 
+     read_csv()
+```
+
+## Diet surveys
+
+### DHQ3-based PDI
+
+```{r}
+# Adult-1
+pdi.adult1 <-
+     here('data', 
+          'processed', 
+          'Adult-1', 
+          'PDI scores by subject.csv') %>% 
+     read_csv()
+
+head(pdi.adult1)
+```
+
+```{r}
+# Adult-2
+pdi.adult2 <-
+     here('data', 
+          'processed', 
+          'Adult-2', 
+          'PDI scores by subject.csv') %>% 
+     read_csv()
+
+head(pdi.adult2)
+```
+
+```{r}
+# Join together
+pdi <- bind_rows(pdi.adult1, pdi.adult2)
+
+rm(pdi.adult1, pdi.adult2)
+```
+
+# Pre-process
+
+## trnL
+
+### Filter phyloseq
+
+```{r}
+# Filter to Adult-1 and -2 cohorts only
+ps <- 
+     ps %>% 
+     subset_samples(study %in% c('Adult-1', 'Adult-2')) %>% 
+     prune_taxa(taxa_sums(.) > 0, .)
+
+ps
+```
+
+### Full alpha diversity measures
+
+```{r}
+alpha <- 
+     rare.df %>% 
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     select(name, study, subj, CH_week, ONR_day, starts_with('obs'))
+```
+
+```{r}
+# Add in full set of observations and Shannon diversity, including samples with fewer than read count threshold
+add <- 
+     estimate_richness(ps, 
+                       measures = c('Observed',
+                                    'Shannon')) %>% 
+     rownames_to_column(var = 'name') %>% 
+     mutate(name = gsub('\\.', '-', name)) %>%  # Correct '.' to '-' substitution
+     rename(obs = Observed)
+
+# Populate with sample data
+add <- 
+     ps@sam_data %>%
+     data.frame() %>% 
+     rownames_to_column(var = 'row') %>% 
+     select(row, study, subj, CH_week, ONR_day) %>% 
+     right_join(add, by = c('row' = 'name')) %>% 
+     rename(name = row)
+
+alpha <- 
+     full_join(alpha,
+               add)
+```
+
+### Mean per participant
+
+```{r}
+# Average trnL richness within each subject
+alpha.mean <-
+     alpha %>% 
+     group_by(study, subj) %>% 
+     summarize(mean = mean(obs),
+               mean_shannon = mean(Shannon),
+               mean_rare = mean(obs_rare, na.rm = TRUE)) %>% 
+     ungroup()
+```
+
+# Analyze
+
+## PDI
+
+```{r}
+# Join mean richness to PDI data
+pdi <- 
+     alpha.mean %>% 
+     left_join(pdi)
+```
+
+```{r}
+# Make labels plot-friendly
+names(pdi)[names(pdi) == 'pdi'] <- 'PDI'
+names(pdi)[names(pdi) == 'hpdi'] <- 'hPDI'
+names(pdi)[names(pdi) == 'updi'] <- 'uPDI'
+```
+
+```{r}
+# Select relevant columns, get in long form
+pdi.long <- 
+     pdi %>% 
+     select(study:uPDI) %>% 
+     pivot_longer(cols = matches('pdi'),
+                  names_to = 'index', 
+                  values_to = 'value')
+
+pdi.long$index <- factor(pdi.long$index,
+                         levels = c('PDI', 'hPDI', 'uPDI'))
+```
+
+### Adult-1
+
+```{r}
+pdi.long %>% 
+     filter(study == 'Adult-1') %>% 
+     ggplot(aes(x = mean, y = value)) +
+     geom_point() +
+     facet_wrap(~index) +
+     labs(x = 'Mean *trnL* richness',
+          y = 'Dietary index score') +
+     theme_bw() +
+     theme(axis.title.x = ggtext::element_markdown(),
+           axis.title = element_text(size = 14))
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results',
+#             'manuscript',
+#             '2',
+#             paste0(plotID, '_C trnL richness x PDI indices (Adult-1).pdf')),
+#        height = 3, width = 7)
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean + PDI,
+              data = ., 
+              method = 'spearman')
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean + hPDI,
+              data = ., 
+              method = 'spearman')
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-1') %>% 
+     cor.test(~ mean + uPDI,
+              data = ., 
+              method = 'spearman')
+```
+
+
+### Adult-2
+
+```{r}
+pdi.long %>% 
+     filter(study == 'Adult-2') %>% 
+     ggplot(aes(x = mean, y = value)) +
+     geom_point() +
+     facet_wrap(~index) +
+     labs(x = 'Mean *trnL* richness',
+          y = 'Dietary index score') +
+     theme_bw() +
+     theme(axis.title.x = ggtext::element_markdown(),
+           axis.title = element_text(size = 14))
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results',
+#             'manuscript',
+#             '2',
+#             paste0(plotID, '_C trnL richness x PDI indices (Adult-2).pdf')),
+#        height = 3, width = 7)
+```
+
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean + PDI,
+              data = ., 
+              method = 'spearman')
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean + hPDI,
+              data = ., 
+              method = 'spearman')
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-2') %>% 
+     cor.test(~ mean + uPDI,
+              data = ., 
+              method = 'spearman')
+```

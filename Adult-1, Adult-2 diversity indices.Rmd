@@ -4,6 +4,7 @@ output: html_notebook
 ---
 
 # Setup
+
 ```{r setup, include=FALSE, echo=FALSE}
 require("knitr")
 opts_knit$set(root.dir = file.path(getwd(), '..'))
@@ -84,19 +85,6 @@ ffq.adult1 <-
 head(ffq.adult1)
 ```
 
-##### PDI
-
-```{r}
-pdi.adult1 <-
-     here('data', 
-          'processed', 
-          'Adult-1', 
-          'PDI scores by subject.csv') %>% 
-     read_csv()
-
-head(pdi.adult1)
-```
-
 #### Adult-2
 
 ```{r}
@@ -110,26 +98,11 @@ ffq.adult2 <-
 head(ffq.adult2)
 ```
 
-##### PDI
-
-```{r}
-pdi.adult2 <-
-     here('data', 
-          'processed', 
-          'Adult-2', 
-          'PDI scores by subject.csv') %>% 
-     read_csv()
-
-head(pdi.adult2)
-```
-
 ```{r}
 # Join together
 ffq <- bind_rows(ffq.adult1, ffq.adult2)
-pdi <- bind_rows(pdi.adult1, pdi.adult2)
 
-rm(ffq.adult1, ffq.adult2,
-   pdi.adult1, pdi.adult2)
+rm(ffq.adult1, ffq.adult2)
 ```
 
 # Pre-process
@@ -296,7 +269,6 @@ adult.stats <-
      distinct()
 ```
 
-
 ```{r}
 # Adult-1
 adult.stats %>% 
@@ -388,132 +360,6 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ```
 
 Based on above plots, move forward with mean
-
-## PDI
-
-```{r}
-# Join to PDI data
-pdi <- 
-     alpha.mean %>% 
-     left_join(pdi)
-```
-
-```{r}
-# Make labels plot-friendly
-names(pdi)[names(pdi) == 'pdi'] <- 'PDI'
-names(pdi)[names(pdi) == 'hpdi'] <- 'hPDI'
-names(pdi)[names(pdi) == 'updi'] <- 'uPDI'
-```
-
-```{r}
-# Select relevant columns, get in long form
-pdi.long <- 
-     pdi %>% 
-     select(study:uPDI) %>% 
-     pivot_longer(cols = matches('pdi'),
-                  names_to = 'index', 
-                  values_to = 'value')
-
-pdi.long$index <- factor(pdi.long$index,
-                         levels = c('PDI', 'hPDI', 'uPDI'))
-```
-
-### Adult-1
-
-```{r}
-pdi.long %>% 
-     filter(study == 'Adult-1') %>% 
-     ggplot(aes(x = mean, y = value)) +
-     geom_point() +
-     facet_wrap(~index) +
-     labs(x = 'Mean *trnL* richness',
-          y = 'Dietary index score') +
-     theme_bw() +
-     theme(axis.title.x = ggtext::element_markdown(),
-           axis.title = element_text(size = 14))
-```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results',
-#             'manuscript',
-#             '2',
-#             paste0(plotID, '_C trnL richness x PDI indices (Adult-1).pdf')),
-#        height = 3, width = 7)
-```
-
-```{r}
-pdi %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean + PDI,
-              data = ., 
-              method = 'spearman')
-```
-
-```{r}
-pdi %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean + hPDI,
-              data = ., 
-              method = 'spearman')
-```
-
-```{r}
-pdi %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean + uPDI,
-              data = ., 
-              method = 'spearman')
-```
-
-
-### Adult-2
-
-```{r}
-pdi.long %>% 
-     filter(study == 'Adult-2') %>% 
-     ggplot(aes(x = mean, y = value)) +
-     geom_point() +
-     facet_wrap(~index) +
-     labs(x = 'Mean *trnL* richness',
-          y = 'Dietary index score') +
-     theme_bw() +
-     theme(axis.title.x = ggtext::element_markdown(),
-           axis.title = element_text(size = 14))
-```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results',
-#             'manuscript',
-#             '2',
-#             paste0(plotID, '_C trnL richness x PDI indices (Adult-2).pdf')),
-#        height = 3, width = 7)
-```
-
-
-```{r}
-pdi %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean + PDI,
-              data = ., 
-              method = 'spearman')
-```
-
-```{r}
-pdi %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean + hPDI,
-              data = ., 
-              method = 'spearman')
-```
-
-```{r}
-pdi %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean + uPDI,
-              data = ., 
-              method = 'spearman')
-```
-
 
 ## HEI
 
