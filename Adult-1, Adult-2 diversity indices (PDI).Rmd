@@ -275,3 +275,143 @@ pdi %>%
               data = ., 
               method = 'spearman')
 ```
+
+## Backwards selection
+
+Organize as a function, so that can be run on both Adult-1 and Adult-2 cohorts, with the results compared.
+
+```{r}
+# Helper function to calculate mean richness from participants, with optional subsetting of taxa
+mean_richness <- 
+     function(ps, taxa = NULL){
+          # ps: phyloseq object
+          # taxa: list of taxa to EXCLUDE from richness calculation
+          
+          # Get all data
+          melt <- 
+               psmelt(ps) %>% 
+               suppressWarnings() # For phyloseq objects where melting leads to variable name redundancy 
+          # Calculate mean per-participant trnL richness
+          richness <- 
+               melt %>% 
+               filter(Abundance > 0) %>% 
+               filter(!(OTU %in% taxa)) %>% 
+               group_by(Sample, subj) %>% 
+               count() %>% # Richness
+               ungroup() %>% 
+               group_by(subj) %>% 
+               summarize(mean_obs = mean(n)) # Within-subject average richness
+          
+          richness
+     }
+```
+
+```{r}
+backwards_selection <- 
+     function(pdi,
+              phyloseq){
+          
+          # INITIALIZATION
+          # First, calculate trnL x PDI without limiting taxa, as above:
+          # Get simplified richness dataframe
+          richness <- mean_richness(phyloseq, taxa = NULL)
+          
+          # Subset PDI to relevant columns: subject and hPDI
+          pdi <- select(pdi, subj, hpdi)
+          
+          # Join together
+          richness <- left_join(richness, pdi,
+                                by = 'subj')
+          
+          # Calculate correlation
+          # Get warning: "Cannot compute exact p-value with ties"
+          spearman <- 
+               cor.test(richness$mean_obs, 
+                        richness$hpdi,
+                        method = 'spearman') %>% 
+               suppressWarnings()
+          
+          # Initialize variables for while loop
+          max_rho <- -Inf
+          new_rho <- spearman$estimate
+          dropped_features <- c()
+          all_features <- taxa_names(phyloseq)
+          
+          # BACKWARDS SELECTION
+          while (new_rho >= max_rho){
+               # Update rho to this value, then begin the process again
+               max_rho <- new_rho
+               
+               # Book-keeping dataframe for iterating over features
+               results <- 
+                    data.frame(feature = NULL,
+                               rho = NULL,
+                               p = NULL)
+               
+               for (f in all_features){
+                    # Calculate a new richness with that feature dropped
+                    # (in addition to all prior drops)
+                    richness <- 
+                         mean_richness(phyloseq,
+                                       taxa = c(dropped_features,
+                                                f))
+                    
+                    # Join to hPDI
+                    richness <- left_join(richness, pdi,
+                                          by = 'subj')
+                    
+                    # Calculate correlation
+                    spearman <- 
+                         cor.test(richness$mean_obs, 
+                                  richness$hpdi,
+                                  method = 'spearman') %>% 
+                         suppressWarnings()
+                    
+                    
+                    # Bind to results dataframe
+                    row <- c(f,
+                             spearman$estimate, 
+                             spearman$p.value)
+                    
+                    names(row) <- c('feature', 'rho', 'p')
+                    
+                    results <- bind_rows(results, row)
+               }
+               
+               # Do type conversion on results
+               results <- 
+                    results %>% 
+                    mutate(across(-feature, as.numeric)) 
+               
+               # Remove p values that aren't significant
+               results <- filter(results, p < 0.05)
+               
+               # Find the maximum correlation coefficient
+               new_rho <- max(results$rho) 
+               
+               # If we're going to loop again, preserve the feature to drop
+               # and remove it from the all_features list
+               if (new_rho >= max_rho){
+                    # Find the feature to remove
+                    # Note: there might be more than one: If so, choose at random
+                    drop <- 
+                         results %>% 
+                         filter(rho == new_rho) %>% 
+                         pull(feature) %>% 
+                         sample(size = 1) 
+                    
+                    dropped_features <- c(dropped_features, drop)
+                    all_features <- 
+                         setdiff(taxa_names(phyloseq),
+                                  dropped_features)
+               }
+               
+               # Print where we are
+               cat('Features dropped:', length(dropped_features), '\n')
+          }
+          
+          # Return the list of dropped features
+          dropped_features
+     }
+```
+
