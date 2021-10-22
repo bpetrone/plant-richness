@@ -24,7 +24,10 @@ Note this is already trimmed to only those taxa identified to a food species, wi
 ```{r}
 # Read in last saved phyloseqs
 ps <- 
-     here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds') %>% 
+     here('data', 
+          'processed', 
+          'phyloseq', 
+          'trnL_combined_ps.rds') %>% 
      readRDS()
 
 ps
@@ -257,6 +260,161 @@ adult.stats <-
 range(adult.stats$med, na.rm = T)
 range(adult.stats$sd, na.rm = T)
 ```
+
+### Within-subject vs. between-subject
+
+#### Plot
+
+```{r}
+# Add study to stats
+adult.stats <- 
+     samdf %>% 
+     select(study, subj) %>% 
+     distinct() %>% 
+     right_join(adult.stats)
+```
+
+```{r}
+ggplot(adult.stats, aes(x = study, y = sd)) +
+     geom_boxplot() +
+     labs(x = 'Cohort', y = 'Within-subject standard deviation') +
+     theme_bw()
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            'supplemental',
+            paste0(plotID, '_within subject variation (sd).pdf')),
+       height = 4, width = 3)
+```
+
+```{r}
+# Summarize standard deviation of subjects in each cohort
+adult.stats %>% 
+     group_by(study) %>% 
+     summarise(sd = sd(mean, na.rm = TRUE))
+```
+#### Stats
+
+##### ANOVA
+
+Using [this](https://stackoverflow.com/questions/1401894/calculate-within-and-between-variances-and-confidence-intervals-in-r) StackExchange thread as a model.
+
+Check assumptions
+
+```{r}
+bartlett.test(obs ~ subj, data = alpha)
+```
+
+```{r}
+# Welch test can be used when variances are unequal:
+oneway.test(obs ~ subj, data = alpha)
+```
+
+```{r}
+fit <- lm(obs ~ subj, data = alpha)
+fit
+```
+
+```{r}
+anova(fit)
+```
+
+```{r}
+degreesOfFreedom = anova(fit)[, 'Df']
+names(degreesOfFreedom) = c('subject', 'error')
+degreesOfFreedom
+```
+
+```{r}
+# Within-subject variance (or error)
+anova(fit)["Residuals", "Mean Sq"]
+```
+
+```{r}
+# Between subject variance (or treatment)
+anova(fit)["subj", "Mean Sq"]
+```
+
+##### KS test
+
+```{r}
+# Get vector for between-subject distribution: the mean trnL richness of each subject
+
+between <- 
+     adult.stats %>% 
+     filter(study == 'Adult-1') %>% 
+     pull(mean)
+
+subjects <- 
+     adult.stats %>% 
+     filter(study == 'Adult-1') %>% 
+     pull(subj) %>% 
+     sort()
+
+results.df <- 
+     data.frame(
+          study = NULL,
+          subj = NULL,
+          D = NULL,
+          P = NULL
+     )
+
+for (s in subjects){
+     # Compare between-subjects distribution to within-subject distribution
+     # for this particular subject
+     result <- 
+          alpha %>% 
+          filter(subj == s) %>% 
+          pull(obs_rare) %>% 
+          ks.test(., between)
+     
+     row = c('Adult-1', s, result$statistic, result$p.value)
+     names(row) <- c('study', 'subj', 'D', 'p')
+     
+     results.df <- bind_rows(results.df, row)
+}
+```
+
+```{r}
+# Plot results as p-value histogram
+results.df$p <- as.numeric(results.df$p)
+
+hist(results.df$p, breaks = 20)
+```
+
+
+```{r}
+fit.within <- 
+     aov(obs ~ subj,
+         data = alpha)
+```
+
+```{r}
+summary(fit.within)
+```
+
+Think I need an additional layer of summarizing here??
+
+```{r}
+fit.between <- 
+     aov(obs ~ study,
+         data = alpha)
+```
+
+```{r}
+summary(fit.between)
+```
+
+
+```{r}
+aov(obs ~ study + subj,
+         data = alpha) %>% 
+     summary()
+```
+
 
 ### Mean vs. variance
 
