@@ -10,11 +10,15 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 ```
 
 ```{r libraries, include=FALSE, echo=FALSE}
+library(car) # For vif()
+library(fitdistrplus)
 library(here)
-library(MButils) # for lowest_level naming
+library(lme4) # For glmer()
 library(phyloseq)
 library(tidyverse)
-library(vegan)
+
+# Make dplyr select the default
+select <- dplyr::select
 ```
 
 # Load data
@@ -91,7 +95,6 @@ for (delta in 1:7){
 
 alpha
 ```
-
 ## Menu data
 
 ```{r}
@@ -105,6 +108,42 @@ ps.menu <- subset_taxa(ps.menu,
                        kingdom == 'Viridiplantae')
 ntaxa(ps.menu)
 ```
+
+### Normalize by kcal
+
+```{r}
+macros <- c('carbohydrates (g)',
+            'fat (g)',
+            'protein (g)',
+            'dietary fiber (g)')
+
+nutrients <- 
+     nutrients %>% 
+     mutate(across(all_of(macros), 
+                   ~ . / calories,
+                   .names = '{.col}_norm'))
+```
+
+### % cal by nutrient
+
+```{r}
+# 4 kcal/gram for carbs, protein
+nutrients <- 
+     nutrients %>% 
+     mutate(across(c(`carbohydrates (g)`, `protein (g)`, ), 
+                   ~ . * 4/ calories,
+                   .names = '{.col}_pct_tot'))
+
+# 9 kcal/g for fat
+nutrients$`fat (g)_pct_tot` <- nutrients$`fat (g)`*9/nutrients$calories
+```
+
+```{r}
+# Sanity check
+nutrients %>% select(ends_with('pct_tot')) %>% rowSums() %>% round()
+```
+
+Ok, good, all within rounding error. 
 
 ### Calculate richness
 
@@ -160,7 +199,7 @@ range(alpha.menu$obs_menu)
 What if I filter out weekends (lower quality?)
 ```{r}
 alpha.menu %>% 
-     filter(!(weekday %in% c('Saturday', 'Sunday'))) %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
      pull(obs_menu) %>% 
      range()
 ```
@@ -168,7 +207,7 @@ alpha.menu %>%
 Median within each subject
 
 ```{r}
-# Including weekends
+# Including weekends 
 alpha.menu %>% 
      group_by(subj) %>% 
      summarize(median = median(obs_menu),
@@ -178,7 +217,7 @@ alpha.menu %>%
 ```{r}
 # Excluding weekends
 alpha.menu %>% 
-     filter(!(weekday %in% c('Saturday', 'Sunday'))) %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
      group_by(subj) %>% 
      summarize(median = median(obs_menu),
                sd = sd(obs_menu))
@@ -193,21 +232,7 @@ Have two dataframes:
 
 First, might want to understand day-to-day variability in trnL richness compared to menu richness.
 
-
-```{r}
-ggplot(alpha.menu, aes(x = date_menu, y = obs_menu, color = subj)) +
-     geom_point() +
-     facet_wrap(~subj, scales = 'free_x') +
-     theme_bw() +
-     theme(legend.position = 'none') 
-```
-```{r}
-ggplot(alpha, aes(x = date, y = obs_rare, color = subj)) +
-     geom_point() +
-     facet_wrap(~subj, scales = 'free_x') +
-     theme_bw() +
-     theme(legend.position = 'none') 
-```
+### Raw richness
 
 ```{r}
 # 1 day of lag
@@ -230,22 +255,101 @@ alpha.joint <-
 
 head(alpha.joint)
 ```
+Range of menu taxa compared to range of trnL taxa
 ```{r}
-ggplot(alpha.joint, aes(x = obs_menu, y = obs_rare, color = subj)) +
-     geom_abline(slope = 1, intercept = 0) +
-     geom_point() +
+# Pivot data to long form by method
+alpha.range <- 
+     alpha.joint %>% 
+     select(subj, obs, obs_menu) %>% 
+     pivot_longer(cols = -subj,
+                  names_to = 'measure',
+                  values_to = 'richness') %>% 
+     mutate(measure = ifelse(measure == 'obs',
+                             yes = 'Metabarcoding',
+                             no = 'Menu'))
+
+alpha.range
+```
+```{r}
+# Factor subjects
+alpha.range$subj <- 
+     factor(alpha.range$subj,
+            levels = c('JN55', 'AK65', 'PC74', 'ML48'),
+            labels = 1:4)
+```
+
+```{r}
+ggplot(alpha.range, aes(x = subj, y = richness, color = measure)) +
+     geom_boxplot() +
+     scale_color_manual(values = c('black', 'darkgreen')) +
+     labs(x = 'Participant', 
+          y = 'Plant taxon richness', 
+          color = 'Measure') +
+     theme_classic() +
+     theme(axis.title = element_text(size = 14),
+           legend.position = c(1, 0.8),
+           legend.justification = 'right')
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 'manuscript', '1',
+            paste0(plotID, '_A_trnL richness x menu richness.pdf')),
+       height = 3, width = 4)
+```
+
+```{r}
+ggplot(alpha.joint, aes(x = obs_menu, y = obs)) +
+     geom_point(size = 2, alpha = 0.8) +
      lims(x = c(7, 46), y = c(7, 46)) +
      labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
      coord_equal() +
      theme_bw() +
-     theme(axis.title.y = ggtext::element_markdown())
+     theme(axis.title.y = ggtext::element_markdown()) +
+     theme(axis.title = element_text(size = 14))
 ```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results', 
+#             'manuscript', 
+#             '1',
+#             paste0(plotID, '_B_trnL richness x menu richness.pdf')),
+#        height = 3, width = 3)
+```
+
+```{r}
+cor.test(alpha.joint$obs,
+         alpha.joint$obs_menu,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+### Rarefied richness
 ```{r}
 cor.test(alpha.joint$obs_rare,
          alpha.joint$obs_menu,
          method = 'spearman',
          alternative = 'greater')
 ```
+
+```{r}
+ggplot(alpha.joint, aes(x = obs_menu, y = obs_rare)) +
+     geom_point(size = 2, alpha = 0.8) +
+     lims(x = c(7, 46), y = c(7, 46)) +
+     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
+     coord_equal() +
+     theme_bw() +
+     theme(axis.title.y = ggtext::element_markdown()) +
+     theme(axis.title = element_text(size = 14))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 'manuscript', '1',
+            paste0(plotID, '_B_trnL richness x menu richness.pdf')),
+       height = 3, width = 3)
+```
+
 
 Should I test other days, or leave it at that?
 
@@ -261,6 +365,20 @@ alpha.joint %>%
 ```
 
 How about Sundays, Mondays only
+
+```{r}
+alpha.joint %>% 
+     filter(weekday_menu %in% c('Saturday', 'Sunday')) %>%
+     ggplot(aes(x = obs_menu, y = obs_rare)) +
+     geom_point() +
+     lims(x = c(7, 46), y = c(7, 46)) +
+     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
+     coord_equal() +
+     theme_bw() +
+     theme(axis.title.y = ggtext::element_markdown())
+```
+
+
 ```{r}
 alpha.joint %>% 
      filter(weekday_menu %in% c('Saturday', 'Sunday')) %>%
@@ -326,45 +444,6 @@ alpha.rand %>%
      count()
 ```
 
-
-```{r}
-set.seed(0816)
-
-rand.menu <- 
-     c(
-          sample_subj('AK65', 9),
-          sample_subj('JN55', 13),
-          sample_subj('ML48', 6),
-          sample_subj('PC74', 4)
-     ) %>% 
-     data.frame(comparator_rand = .) %>% 
-     left_join(alpha.menu,
-               by = c('comparator_rand' = 'row'))
-
-alpha.rand <- 
-     alpha.rand %>% 
-     arrange(subj) %>%
-     select(-subj) %>% 
-     bind_cols(rand.menu)
-```
-
-```{r}
-ggplot(alpha.rand, aes(x = obs_menu, y = obs_rare)) +
-     geom_point() +
-     lims(x = c(7, 46), y = c(7, 46)) +
-     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
-     coord_equal() +
-     theme_bw() +
-     theme(axis.title.y = ggtext::element_markdown())
-```
-
-```{r}
-cor.test(alpha.rand$obs_rare,
-         alpha.rand$obs_menu,
-         method = 'spearman',
-         alternative = 'greater')
-```
-
 How about with a random day (any day)?
 
 ```{r}
@@ -425,12 +504,26 @@ alpha.joint %>%
      geom_point()
 ```
 
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
+     ggplot(aes(x = `carbohydrates (g)_pct_tot`, y = obs_rare, color = subj)) +
+     geom_point()
+```
+
 ### Fat
 
 ```{r}
 alpha.joint %>% 
      filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
      ggplot(aes(x = `fat (g)`, y = obs_rare, color = subj)) +
+     geom_point()
+```
+
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
+     ggplot(aes(x = `fat (g)_pct_tot`, y = obs_rare, color = subj)) +
      geom_point()
 ```
 
@@ -443,6 +536,14 @@ alpha.joint %>%
      geom_point()
 ```
 
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
+     ggplot(aes(x = `protein (g)_pct_tot`, y = obs_rare, color = subj)) +
+     geom_point()
+```
+
+
 ### Fiber
 
 ```{r}
@@ -452,11 +553,94 @@ alpha.joint %>%
      geom_point()
 ```
 
-### Food groups
 ```{r}
 alpha.joint %>% 
      filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
-     ggplot(aes(x = vegetables + starches + fruits, 
-                y = obs_rare, color = subj)) +
+     ggplot(aes(x = `dietary fiber (g)_norm`, y = obs_rare, color = subj)) +
      geom_point()
 ```
+
+## Fitted model
+
+```{r}
+# First, want to remove observations following weekends.
+alpha.joint.weekday <- 
+     filter(
+          alpha.joint,
+          !(weekday_menu %in% c('Saturday', 'Sunday'))
+     )
+```
+
+```{r}
+# How many observations does this remove?
+dim(alpha.joint)[1]
+dim(alpha.joint.weekday)[1]
+```
+
+Think multicollinearity may be an issue here.
+
+```{r}
+# Try as a linear model? 
+# kcal-normalized macronutrients
+fit1 <- glm(obs_rare ~ 
+                `fat (g)_norm` +
+                `carbohydrates (g)_norm` +
+                `protein (g)_norm` +
+                 calories,
+           family = Gamma(link = 'identity'),
+           data = alpha.joint.weekday)
+
+summary(fit1)
+```
+
+```{r}
+vif(fit1)
+```
+Wow, these are super high.  Apparently VIF shouldn't be much greater than 5. 
+
+```{r}
+predictors <- c('calories',
+                'fat (g)_norm',
+                'carbohydrates (g)_norm',
+                'protein (g)_norm')
+
+select(alpha.joint.weekday, one_of(predictors)) %>% 
+     apply(2, range, na.rm = TRUE)
+```
+
+```{r}
+# Re-scale and center
+alpha.joint.weekday <- 
+     alpha.joint.weekday %>% 
+     mutate(across(one_of(predictors),
+                   scale,
+                   .names = '{.col}_scale'))
+```
+
+```{r}
+fit2 <- glmer(obs_rare ~ 
+                   # `fat (g)_norm_scale` +
+                   `carbohydrates (g)_norm_scale` +
+                   `protein (g)_norm_scale` +
+                   calories_scale +
+                   (1 | subj),
+           family = Gamma(link = 'identity'),
+           data = alpha.joint.weekday)
+
+summary(fit2)
+```
+
+Seems like there could be multiple reasons for singular fit warning, from [this thread](https://stackoverflow.com/questions/54597496/how-to-cope-with-a-singular-fit-in-a-linear-mixed-model-lme4):
+- "...collinearity in fixed effects, as in any other linear model. That would need you to revise your model by removing terms."
+- "But in lmer, that (or a "boundary (singular) fit" warning) can also be also triggered in quite simple models when a random effect variance is estimated very near zero and (very loosely) the data is not sufficiently informative to drag the estimate away from the zero starting value."
+
+```{r}
+isSingular(fit2)
+```
+
+The random effect variance here *is* quite small, and there's also collinearity. 
+
+```{r}
+anova(fit1, fit2, test="Chisq")
+```
+
