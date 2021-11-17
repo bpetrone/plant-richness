@@ -44,7 +44,7 @@ ps.onr
 
 ```{r}
 ps.dfc <- 
-     here('data', 'processed', 'phyloseq', '20210623_ps_trnL_DFC.rds') %>% 
+     here('data', 'processed', 'phyloseq', '20211116_ps_trnL_DFC.rds') %>% 
      readRDS()
 
 ps.dfc
@@ -128,8 +128,8 @@ sample_data(ps)$reads <- sample_sums(ps)
 
 sample_data(ps)$study <- 
      factor(sample_data(ps)$study, 
-            levels = c('POMMS', 'CHOMP', 'ONR', 'DFC'), 
-            labels = c('Adolescent', 'Adult-1', 'Adult-2', 'Weight Loss'))
+            levels = c('DFC', 'CHOMP', 'ONR', 'POMMS'), 
+            labels = c('Weight Loss', 'Adult-1', 'Adult-2', 'Adolescent'))
 ```
 
 Note-- also might be interesting to try this ordination not just on ASVs identified to a food. Because of two features:
@@ -214,13 +214,53 @@ taxtab <-
 taxtab$name[duplicated(taxtab$name)]
 ```
 
-This is a bit fraught at higher levels, because depending on exact ASVs these families may actually map to different species.  Ideally go back and do this by exact ASV identity, but for now, try merging everything.
+This is a bit fraught at higher levels, because depending on exact ASVs these families may actually map to different species. 
+
+```{r}
+# Update names at higher levels to reflect distinction
+# Cucurbitaceae 
+# These are subsequences; label by shortest one
+
+taxtab['ATCCTTTTTCCGAAAACAAAAAAAAGG', 
+       'name'] <- 'Cucurbitaceae (pumpkin, squash, gourd, Chinese okra)'
+
+taxtab['ATCCTTTTTCCGAAAACAAAAAAAAG', 
+       'name'] <- 'Cucurbitaceae (pumpkin, squash, gourd, Chinese okra)'
+
+taxtab['ATCCTTTTTCCGAAAACAAAAAAAAGGG', 
+       'name'] <- 'Cucurbitaceae (pumpkin, squash, gourd, Chinese okra)'
+
+# Lauraceae
+# Also subsequences
+taxtab['ATCCTGTTTTCAGAAAACAAGGGTTCAGAAAGCGAGAACCAAAAAAAGGATAG', 
+       'name'] <- 'Lauraceae (cinnamon, bay leaf, avocado)'
+
+taxtab['ATCCTGTTTTCAGAAAACAAGGGTTCAGAAAGCGAGAACCAAAAAAAG', 
+       'name'] <- 'Lauraceae (cinnamon, bay leaf, avocado)'
+
+# Poaceae
+# Also subsequences, but should be labeled
+
+taxtab['ATCCGTGTTTTGAGAAAACAAGGGGTTCTCGAACTAGAATACAAAGGAAAAG', 
+       'name'] <- 'Poaceae (rye, wheat)'
+
+taxtab['AATCCGTGTTTTGAGAAAACAAGGGGTTCTCGAACTAGAATACAAAGGAAAAG', 
+       'name'] <- 'Poaceae (rye, wheat)'
+
+# Rosaceae
+taxtab['ATCCTGTTTTATGAAAATAAACAAGGGTTTCATAAACCGAAAATAAAAAAG', 
+       'name'] <- 'Rosaceae (apples, pears)'
+
+taxtab['ATCCCGTTTTATGAAAACAAACAAGGGTTTCAGAAAGCGAGAATAAATAAAG', 
+       'name'] <- 'Rosaceae (strawberry, brambles, rose)'
+
+```
 
 ```{r}
 # Replace taxonomy table in phyloseq object
 tax_table(ps) <- as.matrix(taxtab)
 
-# Glom at this new level
+# Now, these and all others can be merged by name
 ps <- tax_glom(ps, taxrank = 'name')
 ps
 ```
