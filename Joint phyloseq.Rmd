@@ -93,17 +93,6 @@ sample_data(ps.onr)$diet <- 'Free-eating'
 sample_data(ps.pomms)$diet <- 'Free-eating'
 ```
 
-#### Correct mismatched names
-
-```{r}
-# POMMS uses "ng.added"; all others use "ng_added"
-sample_data(ps.pomms) <- 
-     ps.pomms@sam_data %>% 
-     data.frame() %>% 
-     rename(ng_added = ng.added)
-```
-
-
 #### Unique sample names
 
 ```{r}
@@ -120,8 +109,6 @@ sample_names(ps.onr) <- paste(sample_data(ps.onr)$study,
 sample_names(ps.pomms) <- paste(sample_data(ps.pomms)$study, 
                               seq(nsamples(ps.pomms)), sep = '-')
 ```
-
-
 
 ### Merge
 
