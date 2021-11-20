@@ -211,8 +211,10 @@ samdf <- data.frame(ps@sam_data)
 alpha.stats <- 
      alpha %>% 
      group_by(subj) %>% 
-     summarize(med = median(obs_rare, na.rm = TRUE), 
-               sd = sd(obs_rare, na.rm = TRUE)) %>% 
+     # summarize(med = median(obs_rare, na.rm = TRUE), 
+     #           sd = sd(obs_rare, na.rm = TRUE)) %>% 
+     summarize(med = median(obs, na.rm = TRUE),
+               sd = sd(obs, na.rm = TRUE)) %>%
      arrange(desc(med))
 
 alpha$subj <- factor(alpha$subj, levels = alpha.stats$subj)
@@ -220,28 +222,30 @@ alpha$subj <- factor(alpha$subj, levels = alpha.stats$subj)
 
 ```{r}
 alpha %>% 
-     ggplot(aes(x = subj, y = obs_rare, color = study)) +
-     # facet_wrap(~study, scales = 'free_x') +
+     ggplot(aes(x = subj, y = obs, color = study)) +
+     facet_wrap(~study, scales = 'free_x') +
      geom_boxplot() +
      labs(x = 'Participant', y = '*trnL* richness') +
      scale_color_manual(values = c('black', 'gray60')) +
+     # scale_fill_manual(values = c('black', 'gray60')) +
      theme_classic() +
      theme(
           axis.text.x = element_blank(),
           axis.ticks.x = element_blank(),
-          axis.title = element_text(size = 14),
+          axis.title = element_text(size = 14,
+                                    face = 'bold'),
           axis.title.y = ggtext::element_markdown(),
-          legend.position = c(0.9, 0.9),
-          legend.title = element_blank(),
-          legend.text = element_text(size = 12)
+          strip.text = element_text(size = 12,
+                                    face = 'bold'),
+          legend.position = 'None'
      )
 ```
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results', 'manuscript', '2',
-#             paste0(plotID, '_A_trnL richness by participant.pdf')),
-#        height = 3, width = 9)
+ggsave(here('results', 'manuscript', '2',
+            paste0(plotID, '_A_raw trnL richness by participant.pdf')),
+       height = 3, width = 9)
 ```
 
 ```{r}
@@ -263,82 +267,273 @@ range(adult.stats$sd, na.rm = T)
 
 ### Within-subject vs. between-subject
 
-#### Plot
+#### ANOVA (R01 ONLY)
 
 ```{r}
-# Add study to stats
-adult.stats <- 
-     samdf %>% 
-     select(study, subj) %>% 
-     distinct() %>% 
-     right_join(adult.stats)
+# Adult-1 
+mod.1 <- 
+     alpha %>% 
+     filter(study == 'Adult-1') %>% 
+     aov(obs ~ subj, data = . )
+
+summary(mod.1)
 ```
 
 ```{r}
-ggplot(adult.stats, aes(x = study, y = sd)) +
+# Get partitioning of variance
+var.between <- summary(mod.1)[[1]]['Mean Sq'][1,]
+var.within <- summary(mod.1)[[1]]['Mean Sq'][2,]
+```
+
+Now need to get means. But it's not entirely clear to me *what* mean to use here. The mean of each subject's average richness? This is what it looks like in this assay development link: https://influentialpoints.com/Training/coefficient_of_variation.htm 
+```{r}
+u <- 
+     alpha %>% 
+     filter(study == 'Adult-1') %>% 
+     group_by(subj) %>% 
+     summarize(mu_subj = mean(obs, na.rm = T)) %>% # Mean per-subject richness
+     ungroup() %>% 
+     summarize(mu_pop = mean(mu_subj, 
+                             na.rm = T)) # Population mean of mean per-subject richness
+
+u
+```
+```{r}
+cat('Within', 100*sqrt(var.within)/u$mu_pop, '\n')
+cat('Between', 100*sqrt(var.between)/u$mu_pop, '\n')
+```
+
+
+```{r}
+# Adult-2 
+mod.2 <- 
+     alpha %>% 
+     filter(study == 'Adult-2') %>% 
+     aov(obs ~ subj, data = . )
+
+summary(mod.2)
+```
+
+```{r}
+# Get partitioning of variance
+var.between <- summary(mod.2)[[1]]['Mean Sq'][1,]
+var.within <- summary(mod.2)[[1]]['Mean Sq'][2,]
+```
+
+Now need to get means. But it's not entirely clear to me *what* mean to use here. The mean of each subject's average richness? This is what it looks like in this assay development link: https://influentialpoints.com/Training/coefficient_of_variation.htm 
+```{r}
+u <- 
+     alpha %>% 
+     filter(study == 'Adult-2') %>% 
+     group_by(subj) %>% 
+     summarize(mu_subj = mean(obs, na.rm = T)) %>% # Mean per-subject richness
+     ungroup() %>% 
+     summarize(mu_pop = mean(mu_subj, 
+                             na.rm = T)) # Population mean of mean per-subject richness
+
+u
+```
+```{r}
+cat('Within', 100*sqrt(var.within)/u$mu_pop, '\n')
+cat('Between', 100*sqrt(var.between)/u$mu_pop, '\n')
+```
+
+
+### Overall
+
+```{r}
+mod <- 
+     aov(obs ~ subj, data = alpha)
+
+summary(mod)
+```
+
+```{r}
+# Get partitioning of variance
+var.between <- summary(mod)[[1]]['Mean Sq'][1,]
+var.within <- summary(mod)[[1]]['Mean Sq'][2,]
+```
+
+Now need to get means. But it's not entirely clear to me *what* mean to use here. The mean of each subject's average richness? This is what it looks like in this assay development link: https://influentialpoints.com/Training/coefficient_of_variation.htm 
+```{r}
+u <- 
+     alpha %>% 
+     group_by(subj) %>% 
+     summarize(mu_subj = mean(obs, na.rm = T)) %>% # Mean per-subject richness
+     ungroup() %>% 
+     summarize(mu_pop = mean(mu_subj, 
+                             na.rm = T)) # Population mean of mean per-subject richness
+
+u
+```
+```{r}
+cat('Within', 100*sqrt(var.within)/u$mu_pop, '\n')
+cat('Between', 100*sqrt(var.between)/u$mu_pop, '\n')
+```
+
+#### Permutation-based strategy
+
+##### Raw data
+
+Aggregating within-subject CVs using info from (this site) [https://www-users.york.ac.uk/~mb55/meas/cv.htm]: "We find the coefficient of variation for each subject separately, square these, find their mean, and take the square root of this mean. We can call this the root mean square approach."
+
+```{r}
+within.between <- 
+     alpha %>% 
+     group_by(study, subj) %>% 
+     summarize(sigma = sd(obs, na.rm = T),
+               mu = mean(obs, na.rm = T)) %>% 
+     mutate(cv_within = sigma/mu)
+```
+
+```{r}
+# Now summarize as above
+within.between %>% 
+     ungroup() %>% 
+     mutate(cv_within_sq = cv_within^2) %>% # Square them
+     # group_by(study) %>% 
+     summarize(mean_sq = mean(cv_within_sq)) %>% # Find the mean
+     mutate(root_mean_sq = sqrt(mean_sq)) # Take the square root
+```
+```{r}
+# Now calculate for overall data
+alpha %>% 
+     group_by(study, subj) %>% 
+     summarize(mu_subj = mean(obs, na.rm = T)) %>% # Mean per-subject richness
+     ungroup() %>% 
+     # group_by(study) %>% 
+     summarize(
+          mu_pop = mean(mu_subj, 
+                        na.rm = T), # Population mean of mean per-subject obs.
+          sigma_pop = sd(mu_subj, 
+                         na.rm = T)) %>% # Population sd
+     mutate(cv_between = sigma_pop/mu_pop) 
+```
+
+```{r}
+# Calculate standard deviation for overall cohort and join to data
+within.between <- 
+     alpha %>% 
+     group_by(study, subj) %>% 
+     summarize(mu_subj = mean(obs, na.rm = T)) %>% # Mean per-subject richness
+     ungroup() %>% 
+     group_by(study) %>% 
+     summarize(
+          mu_pop = mean(mu_subj, 
+                        na.rm = T), # Population mean of mean per-subject richness
+          sigma_pop = sd(mu_subj, 
+                         na.rm = T)) %>% # Population sd
+     mutate(cv_between = sigma_pop/mu_pop) %>% 
+     select(study, cv_between) %>% 
+     right_join(within.between)
+```
+
+```{r}
+# Calculate difference
+within.between <- 
+     mutate(within.between,
+            delta = cv_within - cv_between)
+```
+
+```{r}
+# Plot raw data
+ggplot(within.between, aes(x = study, y = cv_within)) +
      geom_boxplot() +
-     labs(x = 'Cohort', y = 'Within-subject standard deviation') +
-     theme_bw()
+     ylab('Within-subject CV') +
+     theme_bw() +
+     theme(axis.title.x = element_blank())
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('..', 
+            'development', 
+            'docs',
+            'r01', 
+            '2021_11',
+            'within-between',
+            paste0(plotID, '_CV on rarefied richness.pdf')),
+       height = 3, width = 3)
+```
+
+```{r}
+# Plot delta
+ggplot(within.between, aes(x = study, y = delta)) +
+     geom_boxplot() +
+     ylab('Within-subject CV - between-subject CV') +
+     theme_bw() +
+     theme(axis.title.x = element_blank())
 ```
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results',
-            'manuscript',
-            'supplemental',
-            paste0(plotID, '_within subject variation (sd).pdf')),
-       height = 4, width = 3)
+ggsave(here('..', 
+            'development', 
+            'docs',
+            'r01', 
+            '2021_11',
+            'within-between',
+            paste0(plotID, '_delta CV on raw richness.pdf')),
+       height = 3, width = 3)
+```
+
+##### Shuffled data
+
+```{r}
+set.seed(10222021)
+
+# Shuffle
+alpha.rand <- alpha 
+alpha.rand$obs <- sample(alpha.rand$obs, length(alpha.rand$obs))
 ```
 
 ```{r}
-# Summarize standard deviation of subjects in each cohort
-adult.stats %>% 
+within.between.rand <- 
+     alpha.rand %>% 
+     group_by(study, subj) %>% 
+     summarize(sd_within = sd(obs))
+```
+
+```{r}
+# Calculate standard deviation for overall cohort ad join to data
+within.between.rand <- 
+     alpha.rand %>% 
+     group_by(study, subj) %>% 
+     summarize(mean = mean(obs)) %>% 
+     ungroup() %>% 
      group_by(study) %>% 
-     summarise(sd = sd(mean, na.rm = TRUE))
-```
-#### Stats
-
-##### ANOVA
-
-Using [this](https://stackoverflow.com/questions/1401894/calculate-within-and-between-variances-and-confidence-intervals-in-r) StackExchange thread as a model.
-
-Check assumptions
-
-```{r}
-bartlett.test(obs ~ subj, data = alpha)
+     summarize(sd_between = sd(mean)) %>% 
+     right_join(within.between.rand)
 ```
 
 ```{r}
-# Welch test can be used when variances are unequal:
-oneway.test(obs ~ subj, data = alpha)
+# Calculate difference
+within.between.rand <- 
+     mutate(within.between.rand,
+            delta = sd_within - sd_between)
 ```
 
 ```{r}
-fit <- lm(obs ~ subj, data = alpha)
-fit
+# Bind together
+within.between$data <- 'Raw'
+within.between.rand$data <- 'Shuffled'
 ```
 
 ```{r}
-anova(fit)
+within.between <- bind_rows(within.between,
+                            within.between.rand)
 ```
 
 ```{r}
-degreesOfFreedom = anova(fit)[, 'Df']
-names(degreesOfFreedom) = c('subject', 'error')
-degreesOfFreedom
+ggplot(within.between, aes(x = data, y = delta)) +
+     geom_boxplot() + 
+     facet_wrap(~study) + 
+     labs(y = 'sd (within) - sd (between)') +
+     theme_bw() +
+     theme(axis.title.x = element_blank())
 ```
 
-```{r}
-# Within-subject variance (or error)
-anova(fit)["Residuals", "Mean Sq"]
-```
 
-```{r}
-# Between subject variance (or treatment)
-anova(fit)["subj", "Mean Sq"]
-```
-
-##### KS test
+#### KS test
 
 ```{r}
 # Get vector for between-subject distribution: the mean trnL richness of each subject
@@ -541,14 +736,18 @@ This is 5 at baseline, and 9 with crude calorie filter.
 ### Visualizations (joint)
 
 ```{r}
-ggplot(ffq, aes(x = mean, y = hei_tot)) +
+ggplot(ffq, aes(x = mean, y = hei_plant_all)) +
      geom_point(alpha = 0.8, size = 2) +
      facet_wrap(~study) +
      labs(x = 'Mean *trnL* richness', 
           y = 'HEI-2015\nplant components score') +
      theme_bw() +
-     theme(axis.title = element_text(size = 14),
-           axis.title.x = ggtext::element_markdown())
+     theme(axis.title = element_text(size = 14,
+                                     face = 'bold'),
+           axis.title.x = ggtext::element_markdown(),
+           axis.text = element_text(size = 12),
+           strip.text = element_text(size = 12,
+                                      face = 'bold'))
 ```
 
 ```{r}
@@ -653,6 +852,54 @@ ffq %>%
               alternative = 'greater')
 ```
 
+#### Linear fit
+
+```{r}
+fit.1 <- 
+     ffq %>% 
+     filter(study == 'Adult-1') %>% 
+     lm(hei_plant_all ~ mean, data = .)
+
+summary(fit.1)
+```
+
+```{r}
+ffq %>% 
+     filter(study == 'Adult-1') %>% 
+     ggplot(aes(x = mean, y = hei_plant_all)) +
+     # geom_abline(slope = fit.1$coefficients[[2]],
+     #             intercept = fit.1$coefficients[[1]],
+     #             color = 'gray',
+     #             linetype = 'dashed') +
+     geom_point() +
+     annotate('text', x = 20, y = 5,
+     label = 'atop(rho == 0.40, p == 0.03)',
+              parse = TRUE,
+              size = 5,
+              color = 'blue') +
+     xlim(0, 25) + ylim(0, 30) +
+     labs(x = 'Mean *trnL* richness',
+          y = 'HEI plant components') +
+     theme_bw() +
+     theme(axis.title.x = ggtext::element_markdown(),
+           axis.title = element_text(size = 14, 
+                                     face = 'bold'),
+           axis.text = element_text(size = 12, 
+                                    face = 'bold'))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('..',
+            'development',
+            'docs',
+            'r01',
+            '2021_11',
+            paste0(plotID, '_Adult-1 HEI plant x trnL.pdf')),
+       height = 3, width = 3)
+```
+
+
 ### Adult-2
 
 #### Total
@@ -713,6 +960,53 @@ ffq %>%
               data = .,
               method = 'spearman',
               alternative = 'greater')
+```
+
+#### Linear fit
+
+```{r}
+fit.2 <- 
+     ffq %>% 
+     filter(study == 'Adult-2') %>% 
+     lm(hei_plant_all ~ mean, data = .)
+
+summary(fit.2)
+```
+
+```{r}
+ffq %>% 
+     filter(study == 'Adult-2') %>% 
+     ggplot(aes(x = mean, y = hei_plant_all)) +
+     geom_abline(slope = fit.2$coefficients[[2]],
+                 intercept = fit.2$coefficients[[1]],
+                 color = 'gray',
+                 linetype = 'dashed') +
+     geom_point() +
+     annotate('text', x = 20, y = 5,
+     label = 'atop(rho == 0.38, p == 0.02)',
+              parse = TRUE,
+              size = 5,
+              color = 'blue') +
+     xlim(0, 25) + ylim(0, 30) +
+     labs(x = 'Mean *trnL* richness',
+          y = 'HEI plant components') +
+     theme_bw() +
+     theme(axis.title.x = ggtext::element_markdown(),
+           axis.title = element_text(size = 14, 
+                                     face = 'bold'),
+           axis.text = element_text(size = 12, 
+                                    face = 'bold'))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('..',
+            'development',
+            'docs',
+            'r01',
+            '2021_11',
+            paste0(plotID, '_Adult-2 HEI plant x trnL.pdf')),
+       height = 3, width = 3)
 ```
 
 ## Combined 
