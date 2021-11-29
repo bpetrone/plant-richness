@@ -142,11 +142,15 @@ So I think reasonable to at least try an ordination on the full dataset (~1000 A
 
 #### Read counts
 
+Keep samples with 0 counts for subsequent QC.
+
 ```{r}
-# Remove samples with 0 read counts
-ps <- prune_samples(sample_sums(ps) > 0, ps)
-ps
+# How many?
+ps %>% 
+     prune_samples(sample_sums(.) == 0, .) %>% 
+     nsamples()
 ```
+
 
 #### Plant taxa
 
@@ -176,9 +180,10 @@ ps
 
 After this step, need to check again for samples with 0 read counts, as their only reads may have been unlabeled.
 ```{r}
-# Remove samples with 0 read counts
-ps <- prune_samples(sample_sums(ps) > 0, ps)
-ps
+# Now, how many?
+ps %>% 
+     prune_samples(sample_sums(.) == 0, .) %>% 
+     nsamples()
 ```
 
 ```{r}
