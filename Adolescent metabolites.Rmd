@@ -1,0 +1,725 @@
+---
+title: "Adolescent metabolites"
+output: html_notebook
+---
+
+```{r setup, include = FALSE, echo = FALSE} 
+require(knitr) 
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r}
+library(here)
+library(fitdistrplus)
+library(lme4) # For glmer
+library(phyloseq)
+library(tidyverse)
+library(vegan) # For rarecurve()
+
+select <- dplyr::select
+```
+
+```{r}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
+
+# Read in data
+```{r}
+# Full trnL phyloseq object
+ps <- 
+     here('data', 
+          'processed',
+          'phyloseq', 
+          'trnL_combined_ps.rds') %>% 
+     readRDS()
+
+ps
+```
+
+```{r}
+# Rarefied richness estimates
+rare.df <- 
+     here('data', 
+          'processed', 
+          'rarefaction',
+          'Rarefied trnL counts (1,000 reads).rds') %>% 
+     readRDS
+
+rare.df
+```
+
+# Pre-process
+
+```{r}
+# Intentionally *not* removing samples with 0 reads here
+ps <- 
+     ps %>% 
+     subset_samples(study == 'Adolescent') %>% 
+     prune_taxa(taxa_sums(.) > 0 , .)
+
+ps
+```
+
+```{r}
+alpha <- 
+     rare.df %>% 
+     filter(study == 'Adolescent') %>% 
+     select(name, study, subj, R24_id:o, starts_with('obs'))
+```
+
+```{r}
+# Add in full set of observations, including samples with fewer than read count threshold
+asvtab <- data.frame(ps@otu_table@.Data)
+obs <- apply(asvtab, 1, function(x){sum(x > 0)})
+
+add <- 
+     data.frame(obs = obs) %>% 
+     rownames_to_column(var = 'name')
+
+# Populate with sample data
+add <- 
+     data.frame(ps@sam_data) %>% 
+     rownames_to_column(var = 'row') %>% 
+     select(row, study, subj, R24_id, visit, o) %>% 
+     right_join(add, by = c('row' = 'name')) %>% 
+     rename(name = row)
+
+alpha <- 
+     add %>% 
+     filter(!(name %in% alpha$name)) %>% 
+     bind_rows(alpha)
+```
+
+POMMS-70 doesn't have a rarefied observation, should figure out why.
+
+```{r}
+# Recode NAs in rarefied data as 0 observations
+alpha$obs_rare[is.na(alpha$obs_rare)] <- 0 
+```
+
+
+## Bind to demographic data
+
+```{r}
+samdf <- 
+     ps@sam_data %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'row') %>% 
+     select(row:reads_tot, R24_id:reads_food)  # Adolescent metadata
+```
+
+### Completeness
+
+Check completeness of important model variables.  Note that `table` won't include these: have to do with `count`.
+
+```{r}
+samdf %>% 
+     group_by(ethnicity) %>% 
+     count()
+```
+
+```{r}
+samdf %>% 
+     group_by(sex) %>% 
+     count()
+```
+
+```{r}
+samdf %>% 
+     group_by(race) %>% 
+     count()
+```
+
+```{r}
+# Recode these to reduce categories with small number
+# Mixed-race responses as "Multiple"
+samdf$race[grep(' ', samdf$race)] <- 'Multiple'
+
+samdf %>% 
+     group_by(race) %>% 
+     count()
+```
+
+```{r}
+samdf %>% 
+     group_by(ses) %>% 
+     count()
+```
+
+```{r}
+# Age into quartiles by year, as in POMMS group analysis
+samdf <- 
+     samdf %>% 
+     mutate(age_years = floor(age_days/365),
+            age_q = cut(age_years,
+                        breaks = 4))
+
+samdf %>% 
+     group_by(age_years) %>% 
+     count()
+```
+How come some of these are incomplete? Will need to address.
+
+### Metabolites
+
+From the POMMS interim report, metabolites that had differences between case and control were:
+
+OB: higher HOMA-IR, HBA1c, CRP, ALT; lower HDL
+
+Targeted: 
+OB: higher valine, glycerol, insulin; lower KIC, KMV, glycine
+
+```{r}
+# Not sure what code for glycerol is, left off here
+metabs <- c('alt', 
+            'c_reactive_protein',
+            'Gly',
+            'hdl',
+            'hba1c',
+            'homa_ir',
+            'hdl',
+            'insulin',
+            'KIC', # α-ketoisocaproate
+            'KMV', # α-keto-β-methylvalerate
+            'Val')
+
+# Now, add AAs (apart from Gly, Val above)
+metabs <- c(metabs, 
+            # ESSENTIAL
+            'Phe',
+            # 'Thr', # Not collected 
+            # 'Trp',# Not collected 
+            'Met',
+            'Leu.Ile', # Joint entry for leucine and isoleucine
+            # 'Lys', # Not collected
+            'His',
+            # OTHER
+            'Ala',
+            'Ser',
+            'Pro',
+            'Tyr',
+            'Asx',
+            'Glx',
+            'Orn',
+            'Cit',
+            'Arg')
+```
+
+```{r}
+# Pull from sample data, and join to results
+alpha <- 
+     samdf %>% 
+     select(name = row, 
+            subj,
+            casecontrol, 
+            timepoint,
+            starts_with('age'), # Want flexibility in choosing here
+            sex,
+            race,
+            ethnicity,
+            zbmi, 
+            ses,
+            one_of(metabs)) %>% 
+     right_join(alpha)
+
+alpha
+```
+# Analyze
+
+Need to think about-- should I be handling two timepoints?  I think best to just start with 1 here. 
+
+I could include a subject effect, which would handle, right?
+
+```{r}
+dim(alpha)
+# alpha <-
+#      alpha %>%
+#      filter(timepoint == 'Entry')
+
+dim(alpha)
+```
+
+```{r}
+alpha %>% 
+     select(subj, casecontrol) %>% 
+     distinct() %>% 
+     group_by(casecontrol) %>% 
+     count()
+```
+
+## Response variable distribution
+
+How about just visualizing data to start?
+
+```{r}
+# Log transform metabolites
+alpha <- 
+     alpha %>% 
+     mutate(across(one_of(metabs),
+                   ~log(.x),
+                   .names = '{.col}_log')) %>% 
+     # Replace with NA if -Inf
+     mutate(across(ends_with('_log'),
+                   ~ifelse(.x == -Inf,
+                           yes = NA,
+                           no = .x)))
+```
+
+```{r}
+# Raw data
+pivot_longer(alpha,
+             one_of(metabs),
+             names_to = 'metabolite',
+             values_to = 'value') %>% 
+     ggplot(aes(x = value)) +
+     geom_histogram() +
+     # ggplot(aes(x = obs, y = value)) +
+     # geom_point(alpha = 0.5) +
+     facet_wrap(~metabolite,
+                scales = 'free')
+```
+
+```{r}
+# Logged
+pivot_longer(alpha,
+                  ends_with('log'),
+                  names_to = 'metabolite',
+                  values_to = 'value') %>% 
+     ggplot(aes(x = value)) +
+     geom_histogram() +
+     # ggplot(aes(x = obs, y = value)) +
+     # geom_point(alpha = 0.5) +
+     facet_wrap(~metabolite,
+                scales = 'free')
+```
+
+```{r}
+# Do any have negative values?
+alpha %>% 
+     select(one_of(metabs)) %>% 
+     apply(2, function(x){range(x, na.rm = TRUE)})
+```
+
+```{r}
+# How often do NAs occur?
+alpha %>% 
+     select(one_of(metabs)) %>% 
+     apply(2, function(x){sum(is.na(x))})
+```
+
+These differ by individual, so don't want to remove them en masse.
+
+## GLM parameters
+
+Check a few above to establish distribution and link function.
+```{r}
+alpha.filt <- filter(alpha, !is.na(alt))
+```
+
+```{r}
+# Create a skewness-kurtosis plot to find the best distribution for data
+descdist(alpha.filt$alt, discrete = FALSE, boot = 500)
+```
+```{r}
+# Fit  data to a variety of distributions to double check above results. 
+fit.norm <- fitdist(alpha.filt$alt, "norm")
+fit.lognorm <- fitdist(alpha.filt$alt, "lnorm")
+fit.gamma <- fitdist(alpha.filt$alt, "gamma")
+```
+
+```{r}
+plot(fit.norm)
+```
+
+```{r}
+plot(fit.gamma)
+```
+
+Following what I think is Nathan Bilmeyer's code from [POMMS github repository](https://github.com/POMMS/methods_baseline_insights/blob/master/2_statistical_analysis_and_figures/Fig3_and_Supplement_script.R):
+
+Had initially tried this as using metabolite plus demographics to predict trnL-- Lawrence suggests doing this the other way around, using trnL to predict metabolite (as would be done in epi studies). 
+
+```{r}
+metabs <- paste(metabs,
+                'log',
+                sep = '_')
+
+metabs
+```
+
+```{r}
+formula     = "`%s` ~ obs + age_q + sex + race + ethnicity + casecontrol"
+
+results     = data.frame(Metabolite=NA, Number=1, Beta=1, SE=1, Tval=1, Pval=1)
+
+for(metab in metabs) {
+	f             = sprintf(formula, metab)
+	model         = tryCatch(glm(f, data=alpha, 
+	                             family = gaussian(link = 'log')),
+	                             # family = Gamma()),
+	                         error=function(e) { NA })
+	n             = tryCatch(nobs(model),                           
+	                         error=function(e) { NA })
+	s             = tryCatch(summary(model)$coef[2,],               
+	                         error=function(e) { rep(NA, 4) })
+	results       = rbind(results, c(metab, n, s))
+}
+
+results          = results[-1,]
+results$Number   = as.numeric(results$Number)
+results$Beta     = as.numeric(results$Beta)
+results$SE       = as.numeric(results$SE)
+results$Tval     = as.numeric(results$Tval)
+results$Pval     = as.numeric(results$Pval)
+results$adj.Pval = p.adjust(results$Pval, method="fdr")
+results          = results[order(results$adj.Pval),]
+```
+
+```{r}
+results
+```
+```{r}
+formula     = "`%s` ~ obs_rare + age_q + sex + race + ethnicity + casecontrol"
+
+results     = data.frame(Metabolite=NA, Number=1, Beta=1, SE=1, Tval=1, Pval=1)
+
+for(metab in metabs) {
+	f             = sprintf(formula, metab)
+	model         = tryCatch(glm(f, data=alpha, 
+	                             family=gaussian()),
+	                             # family = Gamma()),
+	                         error=function(e) { NA })
+	n             = tryCatch(nobs(model),                           
+	                         error=function(e) { NA })
+	s             = tryCatch(summary(model)$coef[2,],               
+	                         error=function(e) { rep(NA, 4) })
+	results       = rbind(results, c(metab, n, s))
+}
+
+results          = results[-1,]
+results$Number   = as.numeric(results$Number)
+results$Beta     = as.numeric(results$Beta)
+results$SE       = as.numeric(results$SE)
+results$Tval     = as.numeric(results$Tval)
+results$Pval     = as.numeric(results$Pval)
+results$adj.Pval = p.adjust(results$Pval, method="fdr")
+results          = results[order(results$adj.Pval),]
+```
+
+```{r}
+results
+```
+
+## Richness response variable
+
+```{r}
+# Check distribution
+alpha %>% 
+     select(-obs_rare_se) %>% 
+     pivot_longer(cols = starts_with('obs'),
+                  names_to = 'metric',
+                  values_to = 'value') %>% 
+     mutate(metric = factor(metric,
+                            levels = c('obs', 'obs_rare'),
+                            labels = c('pMR', 'Rarefied pMR'))) %>% 
+     ggplot(aes(x = value)) +
+     geom_histogram(binwidth = 2,
+                    boundary = 0) +
+     facet_wrap(~metric, nrow = 2) +
+     labs(x = 'Value', y = 'Count') +
+     theme(panel.grid.minor = element_blank())
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'adolescent',
+            paste0(plotID, '_pMR response variable histogram.pdf')),
+       height = 4, width = 2)
+```
+
+Sayan's steps:
+1. Try generic linear model
+     - without zeros
+     - turn zeros into ones
+     - exclude missing data
+     - impute missing data
+seeing if weirdness happens here also
+2. Try then as a GLM with appropriate fmaily and link.
+
+### Linear model
+
+```{r}
+sum(alpha$obs == 0)
+```
+
+```{r}
+alpha %>% 
+     group_by(ses) %>% 
+     count()
+```
+
+##### Remove 0s, exclude missing data
+
+```{r}
+alpha.subset <- 
+     alpha %>% 
+     filter(obs != 0) %>% 
+     filter(!is.na(ses)) %>% 
+     filter(!is.na(age_years))
+
+dim(alpha.subset)
+```
+
+```{r}
+f1 = "obs ~ age_years + sex + race + ethnicity + casecontrol + zbmi + (1|subj)"
+f2 = "obs ~ age_years + sex + race + ethnicity + casecontrol + zbmi + ses + (1|subj)"
+
+model1 <- lmer(f1, 
+             data = alpha.subset) 
+
+model2 <- lmer(f2, 
+             data = alpha.subset) 
+
+summary(model1)
+```
+
+```{r}
+summary(model2)
+```
+
+
+###### Fit
+```{r}
+fits <- 
+     data.frame(model = 1,
+                y = model1@resp$y,
+                y_hat = fitted(model1),
+                resid = residuals(model1))
+
+fits <- 
+     data.frame(model = 2,
+                y = model2@resp$y,
+                y_hat = fitted(model2),
+                resid = residuals(model2)) %>% 
+     bind_rows(fits, .)
+```
+
+```{r}
+ggplot(fits, aes(x = y, y = y_hat)) +
+     geom_point() +
+     geom_abline(slope = 1,
+                 intercept = 0,
+                 color = 'gray80') +
+     facet_wrap(~model) +
+     labs(x = 'pMR (actual)', y = 'pMR (fitted)') +
+     scale_y_continuous(breaks = seq(0, 20, 5),
+                        limits = c(0, 22)) +
+     coord_equal()
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'adolescent',
+            paste0(plotID, '_pMR ~ demographics fitted v. actual, lmer with zeros and missing data removed.pdf')),
+       height = 4, width = 4)
+```
+
+```{r}
+ggplot(fits, aes(x = y_hat, y = resid)) +
+     geom_point() +
+     geom_hline(yintercept = 0,
+                linetype = 'dashed',
+                color = 'red') +
+     facet_wrap(~model) +
+     labs(x = 'pMR (fitted)', y = 'Residuals') +
+     coord_equal()
+```
+
+#### Replace 0 with 1s, remove missing data
+
+```{r}
+alpha.subset <- 
+     alpha %>% 
+     mutate(obs = ifelse(obs == 0,
+                         yes = 1,
+                         no = obs)) %>% 
+     filter(!is.na(ses)) %>% 
+     filter(!is.na(age_years))
+
+dim(alpha.subset)
+```
+
+```{r}
+f1 = "obs ~ age_years + sex + race + ethnicity + casecontrol + zbmi + (1|subj)"
+f2 = "obs ~ age_years + sex + race + ethnicity + casecontrol + zbmi + ses + (1|subj)"
+
+model1 <- lmer(f1, 
+             data = alpha.subset) 
+
+model2 <- lmer(f2, 
+             data = alpha.subset) 
+
+summary(model1)
+```
+
+```{r}
+summary(model2)
+```
+
+###### Fit
+```{r}
+fits <- 
+     data.frame(model = 1,
+                y = model1@resp$y,
+                y_hat = fitted(model1),
+                resid = residuals(model1))
+
+fits <- 
+     data.frame(model = 2,
+                y = model2@resp$y,
+                y_hat = fitted(model2),
+                resid = residuals(model2)) %>% 
+     bind_rows(fits, .)
+```
+
+```{r}
+ggplot(fits, aes(x = y, y = y_hat)) +
+     geom_point() +
+     geom_abline(slope = 1,
+                 intercept = 0,
+                 color = 'gray80') +
+     facet_wrap(~model) +
+     labs(x = 'pMR (actual)', y = 'pMR (fitted)') +
+     scale_y_continuous(breaks = seq(0, 20, 5),
+                        limits = c(0, 22)) +
+     coord_equal()
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'adolescent',
+            paste0(plotID, '_pMR ~ demographics fitted v. actual, lmer with zeros and missing data removed.pdf')),
+       height = 4, width = 4)
+```
+
+```{r}
+ggplot(fits, aes(x = y_hat, y = resid)) +
+     geom_point() +
+     geom_hline(yintercept = 0,
+                linetype = 'dashed',
+                color = 'red') +
+     facet_wrap(~model) +
+     labs(x = 'pMR (fitted)', y = 'Residuals') +
+     coord_equal()
+```
+
+Perhaps re: Justin's outliers point, it would be good to visually inspect the outliers in the dataset.  What ASVs make them up-- do they seem plausible?
+
+#### Multicollinearity
+
+```{r}
+car::vif(model2)
+```
+
+
+#### Fit to data
+
+Plot fitted values against actual data-- how good is the model?
+
+```{r}
+fits <- 
+     data.frame(y = model2$y,
+                y_hat = model2$fitted.values,
+                resid = model2$residuals)
+```
+
+```{r}
+ggplot(fits, aes(x = y, y = y_hat)) +
+     geom_point() +
+     labs(x = 'pMR (actual)', y = 'pMR (fitted)') +
+     coord_equal()
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'adolescent',
+            paste0(plotID, '_pMR ~ demographics fitted v. actual.pdf')),
+       height = 4, width = 4)
+```
+
+
+#### Residuals
+
+```{r}
+ggplot(fits, aes(x = y_hat, y = resid)) +
+     geom_point() +
+     geom_hline(yintercept = 0,
+                linetype = 'dashed',
+                color = 'red') +
+     labs(x = 'pMR (fitted)', y = 'Residuals') +
+     coord_equal()
+```
+```{r}
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'adolescent',
+            paste0(plotID, '_pMR ~ demographics residuals.pdf')),
+       height = 4, width = 8)
+```
+
+
+### Rarefied
+```{r}
+f = "obs_rare ~ age_q + sex + race + ethnicity + casecontrol + zbmi + ses"
+model3 <- 
+     glm(f, 
+         data = alpha, 
+         family = Gamma())
+
+summary(model3)
+```
+
+```{r}
+fits <- 
+     data.frame(y = model3$y,
+                y_hat = model3$fitted.values,
+                resid = model3$residuals)
+```
+
+```{r}
+ggplot(fits, aes(x = y, y = y_hat)) +
+     geom_point() +
+     labs(x = 'Rarefied pMR (actual)', y = 'Rarefied pMR (fitted)') +
+     ylim(0, 21) + xlim(0, 21)
+```
+```{r}
+ggplot(fits, aes(x = y_hat, y = resid)) +
+     geom_point() +
+     geom_hline(yintercept = 0,
+                linetype = 'dashed',
+                color = 'red') +
+     labs(x = 'pMR (fitted)', y = 'Residuals') +
+     coord_equal()
+```
+
