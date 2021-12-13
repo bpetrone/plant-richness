@@ -123,19 +123,40 @@ samdf <-
 Check completeness of important model variables.  Note that `table` won't include these: have to do with `count`.
 
 ```{r}
+# Do all subjects have an entry timepoint?
+n_distinct(samdf$subj)
+
 samdf %>% 
+     filter(timepoint == 'Entry') %>% 
+     nrow()
+```
+
+Almost, but not everyone.  So will group by subject below rather than just filtering to one timepoint. 
+
+```{r}
+# Check only one measure per subject
+samdf %>%
+     group_by(subj, ethnicity) %>% 
+     count() %>% 
+     ungroup() %>% 
      group_by(ethnicity) %>% 
      count()
 ```
 
 ```{r}
 samdf %>% 
+     group_by(subj, sex) %>% 
+     count() %>% 
+     ungroup() %>% 
      group_by(sex) %>% 
      count()
 ```
 
 ```{r}
 samdf %>% 
+     group_by(subj, race) %>% 
+     count() %>% 
+     ungroup() %>% 
      group_by(race) %>% 
      count()
 ```
@@ -146,16 +167,34 @@ samdf %>%
 samdf$race[grep(' ', samdf$race)] <- 'Multiple'
 
 samdf %>% 
+     group_by(subj, race) %>% 
+     count() %>% 
+     ungroup() %>% 
      group_by(race) %>% 
      count()
 ```
 
 ```{r}
 samdf %>% 
+     group_by(subj, casecontrol) %>% 
+     count() %>% 
+     ungroup() %>% 
+     group_by(casecontrol) %>% 
+     count()
+```
+```{r}
+hist(samdf$zbmi)
+```
+
+
+```{r}
+samdf %>% 
+     group_by(subj, ses) %>% 
+     count() %>% 
+     ungroup() %>% 
      group_by(ses) %>% 
      count()
 ```
-
 ```{r}
 # Age into quartiles by year, as in POMMS group analysis
 samdf <- 
@@ -165,10 +204,72 @@ samdf <-
                         breaks = 4))
 
 samdf %>% 
-     group_by(age_years) %>% 
+     group_by(subj, age_q) %>% 
+     count() %>% 
+     ungroup() %>% 
+     group_by(age_q) %>% 
      count()
 ```
 How come some of these are incomplete? Will need to address.
+
+#### Set reference
+
+```{r}
+class(samdf$sex)
+
+samdf$sex <- factor(samdf$sex,
+                          levels = c('M', 'F'))
+
+levels(samdf$sex)
+```
+
+```{r}
+class(samdf$race)
+
+samdf$race <- factor(samdf$race,
+                     levels = c('WH', 
+                                'BL', 
+                                'AS', 
+                                'Multiple'))
+
+levels(samdf$race)
+```
+
+```{r}
+class(samdf$ethnicity)
+
+samdf$ethnicity <- factor(samdf$ethnicity,
+                          levels = c('NH', 'HI'))
+
+levels(samdf$ethnicity)
+```
+
+```{r}
+levels(samdf$age_q)
+```
+
+```{r}
+class(samdf$casecontrol)
+
+samdf$casecontrol <- factor(samdf$casecontrol,
+                          levels = c('Case', 'Control'))
+
+levels(samdf$casecontrol)
+```
+
+```{r}
+class(samdf$ses)
+
+samdf$ses <- factor(samdf$ses,
+                          levels = c('<24,999',
+                                     '25,000-49,999',
+                                     '50,000-74,999',
+                                     '75,000-99,999',
+                                     '>100,000'))
+
+
+levels(samdf$ses)
+```
 
 ### Metabolites
 
@@ -247,14 +348,6 @@ dim(alpha)
 #      filter(timepoint == 'Entry')
 
 dim(alpha)
-```
-
-```{r}
-alpha %>% 
-     select(subj, casecontrol) %>% 
-     distinct() %>% 
-     group_by(casecontrol) %>% 
-     count()
 ```
 
 ## Response variable distribution
@@ -445,7 +538,7 @@ ggsave(here('results',
             'manuscript', 
             'supplemental',
             'adolescent',
-            paste0(plotID, '_pMR response variable histogram.pdf')),
+            paste0(plotID, '_pMR response variable histogram (with zeros).pdf')),
        height = 4, width = 2)
 ```
 
@@ -462,12 +555,6 @@ seeing if weirdness happens here also
 
 ```{r}
 sum(alpha$obs == 0)
-```
-
-```{r}
-alpha %>% 
-     group_by(ses) %>% 
-     count()
 ```
 
 ##### Remove 0s, exclude missing data
