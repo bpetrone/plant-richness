@@ -430,7 +430,7 @@ melt <-
 ```
 
 ```{r}
-ggplot(melt, aes(x = qubit, y = n/reads_tot, color = study)) +
+ggplot(melt, aes(x = reads_tot, y = n/reads_tot, color = study)) +
      geom_point(alpha = 0.5) +
      facet_wrap(~seq_date,
                 nrow = 2,
@@ -440,8 +440,10 @@ ggplot(melt, aes(x = qubit, y = n/reads_tot, color = study)) +
                                   'gray80', 
                                   'gray40', 
                                   'gold2')) +
-     labs(y = '*trnL* taxa per read', x = 'Qubit') +
-     theme(axis.title.y = ggtext::element_markdown(),
+     labs(y = '*trnL* taxa per read', x = 'Total reads') +
+     theme(axis.text.x = element_text(angle = 20,
+                                      hjust = 1), 
+           axis.title.y = ggtext::element_markdown(),
            legend.title = element_blank())
 ```
 ```{r}
@@ -453,6 +455,61 @@ ggsave(here('results',
             'read depth',
             paste0(plotID, '_Observations per read v Qubit.pdf')),
        height = 4, width = 9)
+```
+
+## Rarefaction
+
+### Necessary?
+
+Use iNEXT package here to assess.
+
+```{r}
+# Function needs input x, dataframe of species x sites
+x <- 
+     ps@otu_table@.Data %>% 
+     t() %>% 
+     data.frame()
+
+head(x)
+```
+For input datatype, this is one of
+- Individual-based abundance data (datatype = "abundance")
+- Sampling-unit-based incidence frequencies data (datatype = "incidence_freq")
+- Species by sampling-units incidence matrix (datatype = "incidence_raw")-- this has to be 0/1
+
+```{r}
+sampling_units <- 
+     apply(x, 2, sum) %>% 
+     matrix(ncol = dim(x)[2]) %>% 
+     data.frame()
+
+names(sampling_units) <- names(x)  
+
+x <- bind_rows(sampling_units, x)
+row.names(x)[1] <- 'sampling_units'
+
+head(x)
+```
+```{r}
+# Remove entries with 0 reads
+missing <- (x['sampling_units', ] == 0)
+sum(missing)
+
+dim(x)
+x <- x[, !missing]
+dim(x)
+```
+
+```{r}
+re <- 
+     iNEXT(x,
+           q = 0, # Richness
+           datatype = 'incidence_freq')
+```
+
+```{r}
+ggiNEXT(re, type = 1) +
+     theme(legend.position = 'none')
 ```
 
 ### Iterative PERMANOVA
