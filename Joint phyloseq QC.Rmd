@@ -18,6 +18,19 @@ library(tidyverse)
 library(vegan)
 ```
 
+```{r}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
 # Read in data
 
 ```{r}
