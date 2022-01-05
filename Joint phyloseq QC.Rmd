@@ -820,6 +820,37 @@ rarefaction.df <-
 rarefaction.df
 ```
 
+Make sure-- are these being correctly populated with NA when the sample is below threshold?  Don't think so:
+
+```{r}
+any(is.na(rarefaction.df$obs_rare))
+```
+
+```{r}
+# Join to sample data
+rarefaction.df <- 
+     select(samdf, row, reads_food) %>% 
+     right_join(rarefaction.df, by = c('row' = 'name')) %>% 
+     select(name = row, obs, reads_food, everything())
+
+rarefaction.df
+```
+```{r}
+# Replace values below threshold with NA
+
+# Go back to numeric; need to compare
+rarefaction.df$threshold <- 
+     as.character(rarefaction.df$threshold) %>%
+     as.numeric()
+
+rarefaction.df <- 
+     mutate(rarefaction.df,
+            across(.cols = c(obs_rare, se),
+                   ~ifelse(reads_food < threshold,
+                           yes = NA,
+                           no = .x)))
+```
+
 How to these estimates compare to raw data?
 ```{r}
 # Could maybe add standard error on top of this?
@@ -836,21 +867,21 @@ ggplot(rarefaction.df, aes(x = obs, y = obs_rare)) +
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 
-# ggsave(here('results', 
+# ggsave(here('results',
 #             'manuscript',
 #             'supplemental',
-#             'rarefaction',
+#             'rarefaction-extrapolation',
 #             paste0(plotID, '_Rarefied x raw pMR.pdf')),
 #        height = 4, width = 4)
 ```
 
 ```{r}
 # Save rarefied data
-saveRDS(rarefaction.df,
-        here('data', 
-             'processed', 
-             'rarefaction',
-             'Rarefied trnL counts.rds'))
+# saveRDS(rarefaction.df,
+#         here('data', 
+#              'processed', 
+#              'rarefaction',
+#              'Rarefied trnL counts.rds'))
 ```
 
 Now, try repeating read count plots and alpha diversity with rarefied data. 
