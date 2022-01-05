@@ -586,6 +586,26 @@ p <- ggiNEXT(re, type = 1, facet = 'site') +
                                      face = 'bold'))
 ```
 
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+pdf(here('results', 
+         'manuscript', 
+         'supplemental',
+         'rarefaction-extrapolation',
+         paste0(plotID, '_R-E, sample coverage x sequencing reads, faceted.pdf')),
+       height = 200, width = 25)
+p <- ggiNEXT(re, type = 2, facet = 'site') +
+     facet_wrap(~site, ncol = 10,
+                scales = 'free') + 
+     labs(x = 'Sequencing reads', y = 'Sample coverage') +
+     theme_bw() +
+     theme(legend.position = 'none',
+           axis.text = element_text(size = 12),
+           axis.title = element_text(size = 14,
+                                     face = 'bold'),
+           strip.text = element_text(size = 12,
+                                     face = 'bold'))
+```
 
 ### Iterative PERMANOVA
 
@@ -662,7 +682,8 @@ ggplot(readcounts.permanova,
      geom_line(size = 1) +
      geom_hline(aes(yintercept = 0.05), linetype = 'dashed', 
                 color = '#F8766D') +
-     scale_color_manual(values = c('gray40', 'gray80')) +
+     scale_color_manual(values = c('gray40', 
+                                   'gray80')) +
      labs(x = 'Read count cutoff', 
           y = 'PERMANOVA result', 
           color = 'Fit parameter', 
@@ -670,12 +691,13 @@ ggplot(readcounts.permanova,
           caption = 'Significance threshold crossed at 10,500 reads') +
      theme_bw()
 ```
+
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 
-ggsave(here('results', 'manuscript', 'supplemental',
-            paste0(plotID, '_Iterative PERMANOVA (Jaccard with strata).pdf')),
-       height = 4, width = 6)
+# ggsave(here('results', 'manuscript', 'supplemental',
+#             paste0(plotID, '_Iterative PERMANOVA (Jaccard with strata).pdf')),
+#        height = 4, width = 6)
 ```
 
 ```{r}
@@ -684,7 +706,11 @@ readcounts.permanova %>%
      filter(fit == 'p' & value > 0.05)
 ```
 
-## Rarefaction
+### iNEXT
+
+
+
+### Vegan
 
 #### Inspect curves
 
@@ -705,7 +731,6 @@ rarecurve(asvtab[1:20, ], col = "blue")
 n <- sample(grep('ONR-', row.names(asvtab)), 20)
 rarecurve(asvtab[n, ], col = "blue")
 ```
-
 
 More important than the curves may be conclusions we can draw from the slope: `rareslope` calculates the slope of `rarecurve` at `sample` size (can be a vector).
 ```{r}
@@ -728,7 +753,7 @@ slopes.long
 
 ```{r}
 ggplot(slopes.long, aes(x = sample, y = slope, group = sample)) +
-     geom_point() 
+     geom_point(alpha = 0.5) 
 ```
 
 ```{r}
@@ -742,82 +767,90 @@ means <- colSums(slopes)/dim(slopes)[1]
 
 Ok, so let's consider then a 5000-read threshold, which would mean we'd need 14,626 additional reads to get one more species. Could perhaps go even lower based on inflection point of graph above.
 
-From iterative PERMANOVA on Jaccard distances, may want threshold of 10,500.
-
 ```{r}
-raremin <- 1000
+raremin <- c(1000, 5000, 10000) 
 
-# Discard samples with less than this read count
-asvtab <- 
-     ps %>% 
-     prune_samples(sample_sums(.) > raremin, .) %>% 
-     prune_taxa(taxa_sums(.) > 0, .) %>% 
-     otu_table() %>% 
-     getElement('.Data')
-
+# Rarefy to each of these thresholds
+asvtab <- ps@otu_table@.Data
 asvtab.rare <- rarefy(asvtab, sample = raremin, se = TRUE)
-asvtab.rare[1:2, 1:5]
+
+head(asvtab.rare)
 ```
 
 ```{r}
-# How does this compare to actual number passed to analysis below?
+# Re-organize results
 rarefaction.df <- 
-     data.frame(threshold = 1000,
-                obs_rare = asvtab.rare[1, ],
-                obs_rare_se = asvtab.rare[2, ]) %>% 
-     rownames_to_column(var = 'name') 
+     asvtab.rare %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'name') %>% 
+     separate(name, into = c('name', 'measure'), sep = '\\.') %>% 
+     mutate(measure = ifelse(measure == 'S',
+                             yes = 'obs_rare',
+                             no = 'se')) 
 
-# Add actual # observed taxa
+rarefaction.df
+```
+
+```{r}
+# Arrange for plotting
 rarefaction.df <- 
-     rowSums(asvtab > 0) %>% 
+     rarefaction.df %>% 
+     pivot_longer(cols = matches('N\\d+'),
+                  names_to = 'threshold',
+                  values_to = 'rarefied') %>% 
+     mutate(threshold = gsub(threshold, 
+                             pattern = '^N', 
+                             replacement = '')) %>% 
+     mutate(threshold = factor(threshold,
+                               levels = c(1000, 5000, 10000))) %>% 
+     pivot_wider(names_from = 'measure',
+                 values_from = 'rarefied')
+
+rarefaction.df
+```
+```{r}
+# Join to actual observations
+rarefaction.df <- 
+     apply(asvtab, 1, function(x){sum(x > 0)}) %>% 
      data.frame(obs = .) %>% 
      rownames_to_column(var = 'name') %>% 
-     full_join(rarefaction.df)
+     right_join(rarefaction.df) %>% 
+     select(name, obs, everything())
+
+rarefaction.df
 ```
 
-How well do they agree with one another?
+How to these estimates compare to raw data?
 ```{r}
 # Could maybe add standard error on top of this?
 ggplot(rarefaction.df, aes(x = obs, y = obs_rare)) + 
      geom_abline(slope = 1, intercept = 0, color = 'red') +
-     geom_errorbar(aes(ymin = obs_rare - obs_rare_se, 
-                       ymax = obs_rare + obs_rare_se), 
+     geom_errorbar(aes(ymin = obs_rare - se, 
+                       ymax = obs_rare + se), 
                    width = 0.2) +
-     geom_point() +
+     geom_point(alpha = 0.5) +
+     facet_wrap(~threshold) + 
      coord_equal() +
-     labs(x = 'Observed taxa (raw)', y = 'Observed taxa (rarefied)',
-          title = '1,000 read threshold') + 
-     theme_bw()
+     labs(x = 'pMR (raw)', y = 'pMR (rarefied)')
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 
-# ggsave(here('results', 'manuscript', 'supplemental',
-#             paste0(plotID, '_Observed taxa, 1,000 read rarefaction.pdf')),
+# ggsave(here('results', 
+#             'manuscript',
+#             'supplemental',
+#             'rarefaction',
+#             paste0(plotID, '_Rarefied x raw pMR.pdf')),
 #        height = 4, width = 4)
-```
-```{r}
-# Add sample variables to rarefied richness estimate
-rarefaction.df <- 
-     ps@sam_data %>% 
-     data.frame %>% 
-     rownames_to_column(var = 'row') %>% 
-     select(
-          row, study, subj, # All cohorts
-          date, # DFC
-          CH_week, CH_weekday, # CHOMP
-          ONR_day, # ONR
-          R24_id, visit, o # POMMS
-            ) %>% 
-     right_join(rarefaction.df, by = c('row' = 'name')) %>% 
-     rename(name = row)
 ```
 
 ```{r}
 # Save rarefied data
-# saveRDS(rarefaction.df,
-#         here('data', 'processed', 'rarefaction',
-#              'Rarefied trnL counts (1,000 reads).rds'))
+saveRDS(rarefaction.df,
+        here('data', 
+             'processed', 
+             'rarefaction',
+             'Rarefied trnL counts.rds'))
 ```
 
 Now, try repeating read count plots and alpha diversity with rarefied data. 
