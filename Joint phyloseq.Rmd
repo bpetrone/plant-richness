@@ -24,7 +24,10 @@ library(tidyverse)
 
 ```{r}
 ps.chomp <- 
-     here('data', 'processed', 'phyloseq', '20210714_ps_trnL_CHOMP.rds') %>% 
+     here('data', 
+          'processed', 
+          'phyloseq', 
+          '20210714_ps_trnL_CHOMP.rds') %>% 
      readRDS()
 
 ps.chomp
@@ -34,7 +37,10 @@ ps.chomp
 
 ```{r}
 ps.onr <- 
-     here('data', 'processed', 'phyloseq', '20210617_ps_trnL_ONR.rds') %>% 
+     here('data', 
+          'processed', 
+          'phyloseq', 
+          '20210617_ps_trnL_ONR.rds') %>% 
      readRDS()
 
 ps.onr
@@ -44,7 +50,10 @@ ps.onr
 
 ```{r}
 ps.dfc <- 
-     here('data', 'processed', 'phyloseq', '20211116_ps_trnL_DFC.rds') %>% 
+     here('data', 
+          'processed',
+          'phyloseq', 
+          '20211116_ps_trnL_DFC.rds') %>% 
      readRDS()
 
 ps.dfc
@@ -54,7 +63,10 @@ ps.dfc
 
 ```{r}
 ps.pomms <- 
-     here('data', 'processed', 'phyloseq', '20210816_ps_trnL_POMMS.rds') %>% 
+     here('data', 
+          'processed', 
+          'phyloseq', 
+          '20211221_ps_trnL_POMMS.rds') %>% 
      readRDS()
 
 ps.pomms
@@ -76,21 +88,6 @@ sample_data(ps.chomp)$study <- 'CHOMP'
 sample_data(ps.dfc)$study <- 'DFC'
 sample_data(ps.onr)$study <- 'ONR'
 sample_data(ps.pomms)$study <- 'POMMS'
-```
-
-```{r}
-# Add demographics, as above
-# Age
-sample_data(ps.chomp)$age <- 'Adult'
-sample_data(ps.dfc)$age <- 'Adult'
-sample_data(ps.onr)$age <- 'Adult'
-sample_data(ps.pomms)$age <- 'Adolescent'
-
-# Diet
-sample_data(ps.chomp)$diet <- 'Free-eating'
-sample_data(ps.dfc)$diet <- 'Weight loss'
-sample_data(ps.onr)$diet <- 'Free-eating'
-sample_data(ps.pomms)$diet <- 'Free-eating'
 ```
 
 #### Unique sample names
@@ -121,9 +118,6 @@ ps
 
 ```{r}
 # Adjust sample variables en masse for subsequent plots
-sample_data(ps)$diet <- factor(sample_data(ps)$diet, 
-                               levels = c('Free-eating', 'Weight loss'))
-
 sample_data(ps)$reads <- sample_sums(ps)
 
 sample_data(ps)$study <- 
@@ -132,11 +126,23 @@ sample_data(ps)$study <-
             labels = c('Weight Loss', 'Adult-1', 'Adult-2', 'Adolescent'))
 ```
 
-Note-- also might be interesting to try this ordination not just on ASVs identified to a food. Because of two features:
-* ASVs not identified make up the minority of the total reads in the dataset, so they shouldn't affect the ordination much (at least not for PCA on CLR-transformed counts)
-* However, ASVs that do map to a food, but aren't yet labeled as such, will be shared across cohorts and contribute meaningfully to the ordination, which is what will ultimately happen when I label them.
+### Tidy
 
-So I think reasonable to at least try an ordination on the full dataset (~1000 ASVs) for comparison to the one on the food-only dataset (~10% of that number). 
+#### Add variables
+
+PCR B cycle number only added once changed from 8 to 10 cycles (early 2021). Populate remaining values with 8 cycles.
+
+```{r}
+samdf <- data.frame(ps@sam_data)
+
+samdf %>% 
+     group_by(seq_date, pcrb_cycles) %>% 
+     count()
+```
+
+```{r}
+sample_data(ps)$pcrb_cycles[is.na(sample_data(ps)$pcrb_cycles)] <- 8
+```
 
 ### Filter
 
@@ -150,7 +156,6 @@ ps %>%
      prune_samples(sample_sums(.) == 0, .) %>% 
      nsamples()
 ```
-
 
 #### Plant taxa
 
@@ -273,6 +278,9 @@ ps
 ### Save
 
 ```{r}
-# saveRDS(ps,
-#         here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds'))
+saveRDS(ps,
+        here('data', 
+             'processed', 
+             'phyloseq', 
+             'trnL_combined_ps.rds'))
 ```
