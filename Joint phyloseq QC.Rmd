@@ -522,8 +522,70 @@ re <-
 
 ```{r}
 ggiNEXT(re, type = 1) +
-     theme(legend.position = 'none')
+     labs(x = 'Sequencing reads', y = 'pMR') +
+     theme_bw() +
+     theme(legend.position = 'none',
+           axis.text = element_text(size = 12),
+           axis.title = element_text(size = 14,
+                                     face = 'bold'),
+           strip.text = element_text(size = 12,
+                                     face = 'bold'))
 ```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'rarefaction-extrapolation',
+            paste0(plotID, '_R-E, richness x sequencing reads.pdf')),
+       height = 3, width = 4)
+```
+
+```{r}
+ggiNEXT(re, type = 2) +
+     labs(x = 'Sequencing reads', y = 'Sample coverage') +
+     theme_bw() +
+     theme(legend.position = 'none',
+           axis.text = element_text(size = 12),
+           axis.title = element_text(size = 14,
+                                     face = 'bold'),
+           strip.text = element_text(size = 12,
+                                     face = 'bold'))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'rarefaction-extrapolation',
+            paste0(plotID, '_R-E, coverage x sequencing reads.pdf')),
+       height = 3, width = 4)
+```
+
+Now make same plots, faceted by sample
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+pdf(here('results', 
+         'manuscript', 
+         'supplemental',
+         'rarefaction-extrapolation',
+         paste0(plotID, '_R-E, richness x sequencing reads, faceted.pdf')),
+       height = 200, width = 25)
+p <- ggiNEXT(re, type = 1, facet = 'site') +
+     facet_wrap(~site, ncol = 10,
+                scales = 'free') + 
+     labs(x = 'Sequencing reads', y = 'pMR') +
+     theme_bw() +
+     theme(legend.position = 'none',
+           axis.text = element_text(size = 12),
+           axis.title = element_text(size = 14,
+                                     face = 'bold'),
+           strip.text = element_text(size = 12,
+                                     face = 'bold'))
+```
+
 
 ### Iterative PERMANOVA
 
