@@ -40,11 +40,12 @@ rare.df <-
      here('data', 
           'processed', 
           'rarefaction',
-          'Rarefied trnL counts (10,500 reads).rds') %>% 
+          'Rarefied trnL counts.rds') %>% 
      readRDS
 
 rare.df
 ```
+
 ## Cumulative richness estimates
 
 ```{r}
@@ -125,33 +126,25 @@ ps
 ```{r}
 alpha <- 
      rare.df %>% 
-     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
-     select(name, study, subj, CH_week, ONR_day, starts_with('obs'))
+     filter(grepl(name, pattern = 'CHOMP|ONR') )
 ```
 
 ```{r}
-# Add in full set of observations and Shannon diversity, including samples with fewer than read count threshold
-add <- 
-     estimate_richness(ps, 
-                       measures = c('Observed',
-                                    'Shannon')) %>% 
-     rownames_to_column(var = 'name') %>% 
-     mutate(name = gsub('\\.', '-', name)) %>%  # Correct '.' to '-' substitution
-     rename(obs = Observed)
+# Add in sample metadata
 
 # Populate with sample data
 add <- 
      ps@sam_data %>%
      data.frame() %>% 
      rownames_to_column(var = 'row') %>% 
-     select(row, study, subj, CH_week, ONR_day) %>% 
-     right_join(add, by = c('row' = 'name')) %>% 
-     rename(name = row)
+     select(row, study, subj, CH_week, ONR_day) 
 
 alpha <- 
-     full_join(alpha,
-               add)
+    left_join(alpha, add,
+              by = c('name' = 'row'))
 ```
+
+Then below, can just filter by desired threshold in order to calculate measures.
 
 ## Diet surveys
 
