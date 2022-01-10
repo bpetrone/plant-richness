@@ -11,6 +11,7 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 ```
 
 ```{r, include=FALSE, echo=FALSE}
+library(Biostrings)
 library(here)
 library(phyloseq)
 library(MButils) # For lowest level naming
@@ -34,8 +35,23 @@ ps <-
 ps
 ```
 
-# Tidy
+## Reference database
 
+```{r}
+db <- 
+     here('..', 
+          'food-dbs', 
+          'data', 
+          'processed',
+          'dada2-compatible',
+          'trnL',
+          '20210825_trnL_prior_format (taxonomy).fasta') %>% 
+     readDNAStringSet()
+```
+
+# Pre-process
+
+## trnL
 ```{r}
 # First, remove name column from taxonomy, as not needed here
 taxtab <- 
@@ -46,10 +62,11 @@ taxtab <-
 tax_table(ps) <- tax_table(as.matrix(taxtab))
 ```
 
-## Filter
+### Filter
 
 ```{r}
 # # Remove any taxon seen with 3 or fewer counts in a sample
+# # In current data, this is 60 entries
 # asvtab <- ps@otu_table@.Data
 # asvtab[asvtab <= 3] <- 0
 # 
@@ -58,22 +75,87 @@ tax_table(ps) <- tax_table(as.matrix(taxtab))
 #                            taxa_are_rows = FALSE)
 ```
 
-# Count taxa
+## Reference
+
+Organize in a taxonomy-table style.
 
 ```{r}
-taxtab <- data.frame(ps@tax_table)
+db
 ```
 
 ```{r}
-# Number of taxa detected
-dim(taxtab)[1]
+db.df <- 
+     data.frame(name = names(db),
+                seq = as.character(db))
+
+db.df
+```
+```{r}
+# Separate name and assign ranks
+db.df <- 
+     db.df %>% 
+     # Trim terminal semicolon, not needed here
+     mutate(name = gsub(name, pattern = ';$', replacement = '')) %>% 
+     separate(name, 
+              into = c( "superkingdom",
+                        "kingdom",
+                        "phylum",
+                        "order",
+                        "family",
+                        "genus",
+                        "species",
+                        "subspecies or varietas"),
+              sep = ';') # Based on current structure any sub-species-level designation will land here.
+```
+
+Note that this has subspecies as a column, whereas phyloseq object does not.  Likely need to go back and correct this.  But for clearer merge, just drop subspecies column for now. 
+
+```{r}
+dim(db.df)
+db.df <- 
+     db.df %>% 
+     filter(!(grepl(`subspecies or varietas`,
+                    pattern = 'subsp\\.')))
+dim(db.df)
 ```
 
 ```{r}
-# Number of taxa per phylogenetic category
-apply(taxtab, 2, function(x){n_distinct(x)})
+# Now can rename to varietas column
+names(db.df)[names(db.df) == 'subspecies or varietas'] <- 'varietas'
 ```
 
+Also need to manually correct cyanobacterial by shifting all entries right
+```{r}
+cyano <- 
+     db.df %>% 
+     filter(superkingdom != 'Eukaryota')
+
+# Remove these rows from the full reference
+db.df <- 
+     db.df %>% 
+     filter(superkingdom == 'Eukaryota')
+
+cyano
+```
+```{r}
+# Correct
+cyano <- 
+     cyano %>% 
+     select(-species) %>% # This column is empty
+     select(species = genus,
+            genus = family,
+            family = order,
+            order = phylum,
+            phylum = kingdom,
+            everything()) %>% 
+     mutate(kingdom = NA)
+
+cyano
+```
+
+```{r}
+db.df <- bind_rows(db.df, cyano)
+```
 
 # Visualize taxa
 
@@ -171,7 +253,8 @@ pdf(here('results', 'manuscript', '5',
 # Not detected
 heat_tree(x, 
           node_size_range = c(0.01, 0.01),
-          node_color = ifelse(Adolescent, "grey", "red"))
+          node_color = ifelse(Adolescent, "grey", "red"),
+          node_label = taxon_names)
 ```
 Color argument "accepts a vector, the same length taxon_id or a factor of its length."
 ```{r}
@@ -238,6 +321,174 @@ pdf(here('results', 'manuscript', '5',
 heat_tree(x, 
           node_size_range = c(0.01, 0.01),
           node_color = ifelse(x$data$tax_abund$`Weight Loss`, "grey", "red"))
+```
+
+### Possible v actual detection
+
+#### Add possible taxa
+
+Here, need to add empty rows to phyloseq object and corresponding taxonomy for everything that could have potentially been detected by the reference.  
+
+```{r}
+asvtab <- ps@otu_table@.Data
+taxtab <- ps@tax_table@.Data
+```
+
+```{r}
+add <- db.df$seq[!(db.df$seq %in% colnames(asvtab))]
+```
+
+```{r}
+# Pull rows to join to taxonomy table
+add.tax <- 
+     db.df %>% 
+     filter(seq %in% add) 
+```
+
+Need to label duplicated sequences with their last common ancestor to get this working properly.
+
+```{r eval = FALSE}
+# Group by ASV
+lca <- 
+     add.tax %>%
+     group_by(seq) %>%
+     summarize_all(n_distinct) %>%
+     column_to_rownames(var = 'seq')
+
+# Now, relabel all those with >1 name at a particular level as NA
+# As a placeholder, keep only the first species, knowing it will be overwritten
+add.tax.lca <- 
+     add.tax %>%
+     group_by(seq) %>%
+     slice_head(n = 1) %>%
+     column_to_rownames(var = 'seq')
+```
+
+Now do relabeling 
+```{r eval = FALSE}
+# Confirm ordering is okay
+all(rownames(lca) == rownames(add.tax.lca))
+
+add.tax.lca[lca > 1] = NA
+```
+
+```{r}
+# Combine rows
+taxtab <- rbind(taxtab,
+                add.tax.lca)
+```
+
+Now can update ASV table
+
+```{r}
+# Make empty columns for ASV table
+add.asv <- 
+     matrix(0, 
+            nrow = dim(asvtab)[1],
+            ncol = dim(add.tax.lca)[1])
+
+colnames(add.asv) <- rownames(add.tax.lca)
+rownames(add.asv) <- rownames(asvtab)
+
+asvtab <- cbind(asvtab, add.asv)
+```
+
+Need to make one dummy sample to contain all these taxa, so that the zeros are then labeled in the plot below.
+
+```{r}
+# Add to ASV table
+row <- matrix(1, ncol = dim(asvtab)[2])
+rownames(row) <- 'Reference'
+colnames(row) <- colnames(asvtab)
+
+asvtab <- rbind(asvtab, row)
+```
+
+```{r}
+# Add to sample data
+samdf <- 
+     data.frame(ps@sam_data) %>% 
+     rownames_to_column(var = 'row')
+
+# Add a distinguishing variable
+samdf$type <- 'sample' # All existing rows are samples
+
+row <- matrix(NA, ncol = dim(samdf)[2])
+colnames(row) <- names(samdf)
+row <- 
+     data.frame(row) %>% 
+     mutate(row = 'Reference',
+            type = 'reference')
+
+samdf <- 
+     bind_rows(samdf, row) %>% 
+     column_to_rownames(var = 'row') %>% 
+     select(-sample) # Need to toss this, otherwise it's looked up below
+``` 
+
+```{r}
+dim(asvtab)
+dim(samdf)
+dim(taxtab)
+```
+
+```{r}
+# Update phyloseq object
+ps
+
+ps <- phyloseq(otu_table(asvtab, taxa_are_rows = FALSE),
+               sample_data(samdf),
+               tax_table(as.matrix(taxtab)))
+
+ps
+```
+
+#### Visualize
+
+```{r}
+# Convert phyloseq object to taxmap
+x <- parse_phyloseq(ps)
+```
+
+```{r}
+# Following tutorial https://github.com/grunwaldlab/metacoder/issues/267: 
+# 1. calc_taxon_abund
+# 2. counts_to_presence
+
+x$data$tax_abund <- calc_taxon_abund(x, 
+                                     'otu_table',
+                                     groups = x$data$sample_data$type)
+
+dim(x$data$tax_abund)
+
+# Convert to presence-absence
+x$data$tax_abund <- counts_to_presence(x, 'tax_abund')
+x$data$tax_abund
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+pdf(here('results', 
+         'manuscript',
+         '1', 
+          paste0(plotID, '_B.pdf')),
+         height = 10, width = 10)
+
+# Detected
+heat_tree(x, 
+          node_size_range = c(0.01, 0.01),
+          node_color = ifelse(sample, "darkgreen", "grey"))
+
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_A_not detected (Adolescent).pdf')),
+         height = 10, width = 10)
+
+# Not detected
+heat_tree(x, 
+          node_size_range = c(0.01, 0.01),
+          node_color = ifelse(Adolescent, "grey", "red"),
+          node_label = taxon_names)
 ```
 
 ## UpSet plot
