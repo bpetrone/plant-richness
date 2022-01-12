@@ -16,6 +16,19 @@ library(phyloseq)
 library(tidyverse)
 ```
 
+```{r}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
 # Read in data
 
 ## trnL
@@ -709,10 +722,57 @@ Based on above plots, move forward with mean
 
 ## HEI
 
+### Mean per-participant pMR
+
+Think I want to pivot the data wider, then calculate means, then pivot long again.
+
+```{r}
+head(alpha)
+```
+```{r}
+alpha.wide <- 
+     alpha %>% 
+     select(-c(se, reads_food)) %>% 
+     pivot_wider(names_from = 'threshold',
+                 values_from = 'obs_rare',
+                 names_glue = '{.value}_{threshold}') %>% 
+     select(name, starts_with('obs'), everything())
+
+alpha.wide
+```
+```{r}
+# Now, calculate means
+
+# Ignoring NAs
+alpha.mean <- 
+     alpha.wide %>% 
+     group_by(study, subj) %>% 
+     summarise(across(starts_with('obs'),
+                      ~mean(.x, na.rm = TRUE))) %>% 
+     ungroup()
+
+# Replacing NAs with 0s (strict interpretation as *no* plant matter)
+alpha.mean.0 <- 
+     alpha.wide %>% 
+     mutate(across(starts_with('obs_'),
+                   ~ifelse(is.na(.x),
+                           yes = 0,
+                           no = .x))) %>% 
+     group_by(study, subj) %>% 
+     summarise(across(starts_with('obs'),
+                      ~mean(.x, na.rm = TRUE))) %>% 
+     ungroup()
+
+rm(alpha.wide)
+```
+
+### Join to FFQ
+
 ```{r}
 # Join to FFQ data
 ffq <- 
-     alpha.mean %>% 
+     alpha.mean.0 %>%
+     # alpha.mean %>% 
      left_join(ffq)
 ```
 
@@ -729,299 +789,97 @@ This is 5 at baseline, and 9 with crude calorie filter.
 ### Visualizations (joint)
 
 ```{r}
-ggplot(ffq, aes(x = mean, y = hei_plant_all)) +
-     geom_point(alpha = 0.8, size = 2) +
-     facet_wrap(~study) +
-     labs(x = 'Mean *trnL* richness', 
-          y = 'HEI-2015\nplant components score') +
-     theme_bw() +
-     theme(axis.title = element_text(size = 14,
-                                     face = 'bold'),
-           axis.title.x = ggtext::element_markdown(),
-           axis.text = element_text(size = 12),
-           strip.text = element_text(size = 12,
-                                      face = 'bold'))
+# Make long for easy vis at all rarefaction thresholds
+ffq.long <- 
+     ffq %>%
+     rename(obs_Raw = obs) %>% 
+     pivot_longer(starts_with('obs'),
+                  names_to = 'rarefaction',
+                  values_to = 'pMR') %>% 
+     select(study, subj, rarefaction, pMR, everything()) %>% 
+     mutate(rarefaction = gsub(rarefaction, 
+                               pattern = 'obs_|obs_rare_',
+                               replacement = '')) %>% 
+     mutate(rarefaction = factor(rarefaction,
+                                 levels = c('Raw',
+                                            '10000',
+                                            '5000',
+                                            '1000')))
+
+ffq.long
+```
+
+
+```{r}
+ggplot(ffq.long, aes(x = hei_plant_all, y = pMR)) +
+     geom_point(alpha = 0.7, size = 2) +
+     facet_grid(vars(study), vars(rarefaction),
+                scales = 'free') +
+     labs(y = 'Mean pMR', 
+          x = 'HEI-2015\nplant components score')
 ```
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results',
             'manuscript',
-            '2',
-            paste0(plotID, '_B trnL richness x HEI plant.pdf')),
+            '3',
+            paste0(plotID, 
+                   '_rarefied trnL richness (below threshold as 0) x HEI plant.pdf')),
+       device = cairo_pdf(),
        height = 3, width = 7)
 ```
 
 ```{r}
-ggplot(ffq, aes(x = mean_rare, y = hei_plant_all)) +
-     geom_point() +
+# Manuscript plot
+ffq.long %>% 
+     filter(rarefaction == 1000) %>% 
+     ggplot(aes(x = hei_plant_all, y = pMR)) +
+     geom_point(alpha = 0.7, size = 2) +
      facet_wrap(~study) +
-     labs(x = 'Mean rarefied *trnL* richness', 
-          y = 'HEI-2015 plant components score') +
-     theme_bw() +
-     theme(axis.title = element_text(size = 14),
-           axis.title.x = ggtext::element_markdown())
-```
-
-```{r}
-ggplot(ffq, aes(x = mean_shannon, y = hei_plant_all)) +
-     geom_point(alpha = 0.8, size = 2) +
-     facet_wrap(~study) +
-     labs(x = 'Mean *trnL* Shannon diversity', 
-          y = 'HEI-2015\nplant components score') +
-     theme_bw() +
-     theme(axis.title = element_text(size = 14),
-           axis.title.x = ggtext::element_markdown())
+     labs(y = 'Mean pMR', 
+          x = 'HEI-2015\nplant components score')
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results',
             'manuscript',
-            'supplemental',
-            paste0(plotID, '_trnL Shannon div x HEI plant.pdf')),
-       height = 3, width = 7)
-```
-
-### Adult-1
-
-#### Total
-
-```{r}
-ffq %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean + hei_tot,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
+            '3',
+            paste0(plotID, 
+                   '_rarefied trnL richness (below threshold as 0) x HEI plant.pdf')),
+       device = cairo_pdf(),
+       height = 3, width = 4)
 ```
 
 ```{r}
-ffq %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean_shannon + hei_tot,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
+# Plant HEI
+ffq.long %>% 
+     group_by(study, rarefaction) %>% 
+     summarize(rho = cor.test(~pMR + hei_plant_all, 
+                               method = 'spearman')$estimate,
+               p = cor.test(~pMR + hei_plant_all,
+                             method = 'spearman')$p.value)
 ```
+```{r}
+# Total HEI
+ffq.long %>% 
+     group_by(study, rarefaction) %>% 
+     summarize(rho = cor.test(~pMR + hei_tot, 
+                               method = 'spearman')$estimate,
+               p = cor.test(~pMR + hei_tot,
+                             method = 'spearman')$p.value)
+```
+
 
 ```{r}
-ffq %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean_rare + hei_tot,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
+# Non-plant HEI
+ffq.long %>% 
+     group_by(study, rarefaction) %>% 
+     summarize(rho = cor.test(~pMR + hei_non_plant, 
+                               method = 'spearman')$estimate,
+               p = cor.test(~pMR + hei_non_plant,
+                             method = 'spearman')$p.value)
 ```
-
-#### Plant only
-
-```{r}
-# Stats
-ffq %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean + hei_plant_all,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
-```
-
-```{r}
-# Stats
-ffq %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean_shannon + hei_plant_all,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
-```
-
-```{r}
-# Stats
-ffq %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean_rare + hei_plant_all,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
-```
-
-#### Linear fit
-
-```{r}
-fit.1 <- 
-     ffq %>% 
-     filter(study == 'Adult-1') %>% 
-     lm(hei_plant_all ~ mean, data = .)
-
-summary(fit.1)
-```
-
-```{r}
-ffq %>% 
-     filter(study == 'Adult-1') %>% 
-     ggplot(aes(x = mean, y = hei_plant_all)) +
-     # geom_abline(slope = fit.1$coefficients[[2]],
-     #             intercept = fit.1$coefficients[[1]],
-     #             color = 'gray',
-     #             linetype = 'dashed') +
-     geom_point() +
-     annotate('text', x = 20, y = 5,
-     label = 'atop(rho == 0.40, p == 0.03)',
-              parse = TRUE,
-              size = 5,
-              color = 'blue') +
-     xlim(0, 25) + ylim(0, 30) +
-     labs(x = 'Mean *trnL* richness',
-          y = 'HEI plant components') +
-     theme_bw() +
-     theme(axis.title.x = ggtext::element_markdown(),
-           axis.title = element_text(size = 14, 
-                                     face = 'bold'),
-           axis.text = element_text(size = 12, 
-                                    face = 'bold'))
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('..',
-            'development',
-            'docs',
-            'r01',
-            '2021_11',
-            paste0(plotID, '_Adult-1 HEI plant x trnL.pdf')),
-       height = 3, width = 3)
-```
-
-
-### Adult-2
-
-#### Total
-
-```{r}
-ffq %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean + hei_tot,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
-```
-
-```{r}
-ffq %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean_shannon + hei_tot,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
-```
-
-```{r}
-ffq %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean_rare + hei_tot,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
-```
-
-#### Plant only
-
-```{r}
-# Stats
-ffq %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean + hei_plant_all,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
-```
-
-```{r}
-ffq %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean_shannon + hei_plant_all,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
-```
-
-```{r}
-# Stats
-ffq %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean_rare + hei_plant_all,
-              data = .,
-              method = 'spearman',
-              alternative = 'greater')
-```
-
-#### Linear fit
-
-```{r}
-fit.2 <- 
-     ffq %>% 
-     filter(study == 'Adult-2') %>% 
-     lm(hei_plant_all ~ mean, data = .)
-
-summary(fit.2)
-```
-
-```{r}
-ffq %>% 
-     filter(study == 'Adult-2') %>% 
-     ggplot(aes(x = mean, y = hei_plant_all)) +
-     geom_abline(slope = fit.2$coefficients[[2]],
-                 intercept = fit.2$coefficients[[1]],
-                 color = 'gray',
-                 linetype = 'dashed') +
-     geom_point() +
-     annotate('text', x = 20, y = 5,
-     label = 'atop(rho == 0.38, p == 0.02)',
-              parse = TRUE,
-              size = 5,
-              color = 'blue') +
-     xlim(0, 25) + ylim(0, 30) +
-     labs(x = 'Mean *trnL* richness',
-          y = 'HEI plant components') +
-     theme_bw() +
-     theme(axis.title.x = ggtext::element_markdown(),
-           axis.title = element_text(size = 14, 
-                                     face = 'bold'),
-           axis.text = element_text(size = 12, 
-                                    face = 'bold'))
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('..',
-            'development',
-            'docs',
-            'r01',
-            '2021_11',
-            paste0(plotID, '_Adult-2 HEI plant x trnL.pdf')),
-       height = 3, width = 3)
-```
-
-## Combined 
-
-```{r}
-cor.test(ffq$mean, ffq$hei_plant_all,
-         method = 'spearman',
-         alternative = 'greater')
-```
-
-```{r}
-cor.test(ffq$mean_shannon, ffq$hei_plant_all,
-         method = 'spearman',
-         alternative = 'greater')
-```
-
-```{r}
-cor.test(ffq$mean_rare, ffq$hei_plant_all,
-         method = 'spearman',
-         alternative = 'greater')
-```
-
 ## Sampling scheme
 
 ### Adult-1
