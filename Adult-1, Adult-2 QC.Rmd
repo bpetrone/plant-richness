@@ -59,7 +59,7 @@ rare.df <-
      here('data', 
           'processed', 
           'rarefaction',
-          'Rarefied trnL counts (1,000 reads).rds') %>% 
+          'Rarefied trnL counts.rds') %>% 
      readRDS
 
 rare.df
@@ -91,37 +91,27 @@ ps
 ## Combine richness measures
 
 ```{r}
-# Begin with richness in this dataset
 alpha <- 
-     estimate_richness(ps, 
-                       measures = 'Observed') %>% 
-     rownames_to_column(var = 'name') %>% 
-     mutate(name = gsub('\\.', '-', name)) %>%  # Correct '.' to '-'
-     rename(obs = Observed)
+     rare.df %>% 
+     filter(grepl(name, pattern = 'CHOMP|ONR') )
 ```
 
 ```{r}
+# Add in sample metadata
+
 # Populate with sample data
-alpha <- 
+add <- 
      ps@sam_data %>%
      data.frame() %>% 
      rownames_to_column(var = 'row') %>% 
-     select(row, study, subj, CH_week, ONR_day) %>% 
-     right_join(alpha, by = c('row' = 'name')) %>% 
-     rename(name = row)
-```
-
-```{r}
-# Add in full set of observations, including samples below read count threshold
-add <- 
-     rare.df %>% 
-     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
-     select(name, study, subj, CH_week, ONR_day, starts_with('obs'))
+     select(row, study, subj, CH_week, ONR_day) 
 
 alpha <- 
-     full_join(alpha,
-               add)
+    left_join(alpha, add,
+              by = c('name' = 'row'))
 ```
+
+Then below, can just filter by desired threshold in order to calculate measures.
 
 # Analyze
 
@@ -446,6 +436,66 @@ ggsave(here('results',
 ### PERMANOVA
 
 Idea here would be PERMANOVA on Jaccard for each variable above, then extract R2 and p value. 
+
+Want to do this with Jaccard distance, since ideally analyses here are based on number of observed species. 
+
+```{r}
+vars 
+```
+
+```{r}
+vars.perm <- c('reads_food', 'subj', 'study', vars)
+vars.perm
+```
+
+```{r}
+# PERMANOVA, iterating over variables (or all together?)
+set.seed(10101)
+outputs <- list()
+
+# Remove samples with 0 reads
+ps.temp <- prune_samples(sample_sums(ps) != 0, ps)
+samdf.temp <- data.frame(ps.temp@sam_data)
+samdf.temp$subj <- factor(samdf.temp$subj)
+
+for (var in vars.perm){
+     f <- paste("distance(ps.temp, method = 'jaccard', binary = TRUE) ~",
+                var)
+        output <-
+             vegan::adonis(
+                  distance(
+                       ps.temp,
+                       method = 'jaccard', binary = TRUE
+                  ) ~ var,
+                  data = samdf.temp)
+        
+        outputs[[i]] <- output$aov.tab
+        names(outputs)[i] <- cutoff
+}
+
+# Tabulate values into dataframe
+
+cutoffs <- names(outputs)
+r2s <- lapply(outputs, '[[', 5) %>% 
+        lapply('[[', 1) %>% 
+        unlist()
+pvals <- lapply(outputs, '[[', 6) %>% 
+        lapply('[[', 1) %>% 
+        unlist()
+
+readcounts.permanova <- data.frame(cutoff = names(outputs),
+                                   R2 = r2s,
+                                   p = pvals) 
+
+readcounts.permanova$cutoff <- as.numeric(readcounts.permanova$cutoff)
+
+readcounts.permanova <- pivot_longer(readcounts.permanova, 
+                                     cols = -cutoff,
+                                     names_to = 'fit',
+                                     values_to = 'value')
+```
+
+
 
 ### Linear model
 
