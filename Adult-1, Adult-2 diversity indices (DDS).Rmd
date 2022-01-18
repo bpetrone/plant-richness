@@ -40,12 +40,12 @@ rare.df <-
      here('data', 
           'processed', 
           'rarefaction',
-          'Rarefied trnL counts (10,500 reads).rds') %>% 
+          'Rarefied trnL counts (10500 reads).rds') %>% 
      readRDS
 
 rare.df
 ```
-## Cumulative richness estimates
+### Cumulative richness estimates
 
 ```{r}
 cumulative.df <- 
@@ -60,17 +60,54 @@ cumulative.df <-
 
 ### ASA24
 
+#### DDS
+
 ```{r}
-# CHOMP-only food counts
-recall <- 
-     here('..',
-          'chomp',
-          'data', 
+# Adult-1 
+dds.1 <- 
+     here('data', 
           'processed',
-          'ASA24', 
-          'Food_Tree',
+          'Adult-1',
+          'dds_ASA24.rds') %>% 
+     readRDS()
+
+head(dds.1)
+```
+```{r}
+# Adult-1 
+dds.2 <- 
+     here('data', 
+          'processed',
+          'Adult-2',
+          'dds_ASA24.rds') %>% 
+     readRDS()
+
+head(dds.2)
+```
+#### FVS
+
+```{r}
+# Adult-1 food counts
+fvs.1 <- 
+     here('data', 
+          'processed',
+          'Adult-1',
           'richness_ASA24.rds') %>% 
      readRDS()
+
+head(fvs.1)
+```
+
+```{r}
+# Adult-2 food counts
+fvs.2 <- 
+     here('data', 
+          'processed',
+          'Adult-2',
+          'richness_ASA24.rds') %>% 
+     readRDS()
+
+head(fvs.2)
 ```
 
 # Pre-process
@@ -100,7 +137,7 @@ add <-
      estimate_richness(ps, 
                        measures = 'Observed') %>% 
      rownames_to_column(var = 'name') %>% 
-     mutate(name = gsub('\\.', '-', name)) %>%  # Correct '.' to '-' substitution
+     mutate(name = gsub('\\.', '-', name)) %>%  # Correct '.' to '-'
      rename(obs = Observed)
 
 # Populate with sample data
@@ -121,8 +158,83 @@ alpha <-
 
 ### ASA24
 
+#### DDS
+
 ```{r}
-recall
+# Label study
+dds.1$study <- 'Adult-1'
+dds.2$study <- 'Adult-2'
+```
+
+```{r}
+# Join
+dds <- bind_rows(dds.1, dds.2) 
+head(dds)
+
+rm(dds.1, dds.2)
+```
+
+##### Recode missing values
+```{r}
+any(is.na(dds$dds))
+any(is.na(dds$dds_plant))
+```
+
+```{r}
+dds$dds_plant[is.na(dds$dds_plant)] <- 0
+```
+
+##### Average within subject
+
+```{r}
+dds <- 
+     dds %>% 
+     group_by(study, subj) %>% 
+     summarize(across(starts_with('dds'),
+                      ~mean(.x)))
+
+head(dds)
+```
+#### FVS
+
+```{r}
+# Synchronize names
+fvs.1 <- 
+     rename(fvs.1, subj = ID)
+
+fvs.2 <- 
+     rename(fvs.2, subj = ONR_ID) %>% 
+     mutate(RecallNo = gsub(RecordID,
+                            pattern = '^.*_',
+                            replacement = '') %>% as.numeric())
+```
+
+```{r}
+# Label study
+fvs.1$study <- 'Adult-1'
+fvs.2$study <- 'Adult-2'
+```
+
+```{r}
+# Join
+fvs <- 
+     bind_rows(fvs.1, fvs.2) %>% 
+     rename(fvs_plant = richness_plant,
+            fvs = richness_all) # Update names for clarity
+head(fvs)
+
+rm(fvs.1, fvs.2)
+```
+##### Average within subject
+
+```{r}
+fvs <- 
+     fvs %>% 
+     group_by(study, subj) %>% 
+     summarize(across(starts_with('fvs'),
+                      ~mean(.x)))
+
+head(fvs)
 ```
 
 # Analyze
@@ -141,12 +253,109 @@ alpha.mean <-
      summarize(mean = mean(obs, na.rm = TRUE),
                mean_rare = mean(obs_rare, na.rm = TRUE)) %>% 
      ungroup()
+
+alpha.mean
 ```
+
+### Join together
+
+```{r}
+data <- 
+     alpha.mean %>% 
+     left_join(fvs) %>%
+     left_join(dds)
+```
+
+```{r}
+# Pivot longer for better plotting
+data <- 
+     data %>% 
+     pivot_longer(cols = starts_with(c('dds', 'fvs')),
+                  names_to = 'record_measure',
+                  values_to = 'record_value')
+```
+
+```{r}
+# Recode variables for plotting
+data$record_measure <- factor(data$record_measure,
+                              levels = c('dds', 'dds_plant',
+                                         'fvs', 'fvs_plant'),
+                              labels = c('DDS', 'DDS (plant)',
+                                         'FVS', 'FVS (plant)'))
+```
+
 
 ## Diversity indices
 
-## DDS
+### Visualize
 
+```{r}
+ggplot(data, aes(x = record_value, y = mean)) +
+     geom_point() +
+     facet_wrap(~record_measure,
+                scales = 'free') +
+     labs(x = 'Diet record richness',
+          y = '*trnL* richness') +
+     theme_bw() +
+     theme(axis.title.y = ggtext::element_markdown())
+```
+```{r}
+ggplot(data, aes(x = mean_rare, y = record_value, color = study)) +
+     geom_point(alpha = 0.8) +
+     facet_grid(study ~ record_measure) +
+     labs(y = 'Survey-based diversity index',
+          x = 'Rarefied *trnL* richness') +
+     scale_color_manual(values = c('gray80', 
+                                   'gray40')) +
+     theme_bw() +
+     theme(axis.title.y = ggtext::element_markdown(),
+           legend.position = 'none')
+```
+#### Mean richness
+
+```{r}
+ggplot(data, aes(x = record_value, y = mean)) +
+     geom_point() +
+     facet_wrap(~record_measure,
+                scales = 'free') +
+     labs(x = 'Diet record richness',
+          y = '*trnL* richness') +
+     theme_bw() +
+     theme(axis.title.y = ggtext::element_markdown())
+```
+
+```{r}
+data %>% 
+     group_by(record_measure) %>% 
+     summarize(rho = cor.test(~record_value + mean,
+                              method = 'spearman')$estimate,
+               p = cor.test(~record_value + mean,
+                            method = 'spearman')$p.value)
+```
+
+#### Rarefied richness
+
+```{r}
+ggplot(data, aes(x = record_value, y = mean_rare)) +
+     geom_point() +
+     facet_wrap(~record_measure,
+                scales = 'free') +
+     labs(x = 'Diet record richness',
+          y = '*trnL* richness') +
+     theme_bw() +
+     theme(axis.title.y = ggtext::element_markdown()) 
+```
+
+```{r}
+data %>% 
+     group_by(record_measure) %>% 
+     summarize(rho = cor.test(~record_value + mean_rare,
+                              method = 'spearman')$estimate,
+               p = cor.test(~record_value + mean_rare,
+                            method = 'spearman')$p.value)
+```
+
+## DDS
 
 ### Visualizations (joint)
 
