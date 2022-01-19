@@ -15,6 +15,19 @@ library(here)
 library(tidyverse)
 ```
 
+```{r}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
 # Read in data
 
 ## DHQ3
@@ -23,77 +36,107 @@ library(tidyverse)
 
 ```{r}
 # Adult-1
-ffq.adult1 <- 
+summary.adult1 <- 
      here('data', 
           'processed', 
           'Adult-1', 
           'DHQ3_summary.csv') %>% 
      read_csv()
 
-head(ffq.adult1)
+head(summary.adult1)
 ```
 
 ```{r}
 # Adult-2
-ffq.adult2 <- 
+summary.adult2 <- 
      here('data', 
           'processed', 
           'Adult-2', 
           'DHQ3_summary.csv') %>% 
      read_csv()
 
-head(ffq.adult2)
+head(summary.adult2)
 ```
 
 ### Detailed responses
 
 ```{r}
 # Adult-1
-ffq.adult1 <- 
+detail.adult1 <- 
      here('data', 
           'processed', 
           'Adult-1', 
           'DHQ3_detail.csv') %>% 
      read_csv()
 
-head(ffq.adult1)
+head(detail.adult1)
 ```
 
 ```{r}
 # Adult-2
-ffq.adult2 <- 
+detail.adult2 <- 
      here('data', 
           'processed', 
           'Adult-2', 
           'DHQ3_detail.csv') %>% 
      read_csv()
 
-head(ffq.adult2)
+head(detail.adult2)
 ```
 
 # Pre-process
 
 ```{r}
-# Join together
-ffq <- bind_rows(ffq.adult1, ffq.adult2)
-rm(ffq.adult1, ffq.adult2)
+# Add study variable
+
+summary.adult1$study <- 'Adult-1'
+summary.adult2$study <- 'Adult-2'
+
+detail.adult1$study <- 'Adult-1'
+detail.adult2$study <- 'Adult-2'
+```
+
+
+```{r}
+# Join together, arrange columns
+summary <- 
+     bind_rows(summary.adult1, summary.adult2) %>% 
+     select(study, everything())
+
+detail <- 
+     bind_rows(detail.adult1, detail.adult2) %>% 
+     select(study, everything())
+```
+
+```{r}
+# Remove raw data files
+rm(summary.adult1, 
+   summary.adult2,
+   detail.adult1, 
+   detail.adult2)
 ```
 
 ## Tidy
 
 ```{r}
 # Remove un-needed columns (metadata, supplements)
-ffq <- select(ffq, 
-              -c(`Record Number`,
-                 starts_with('SUPP'))
-              )
+summary <- select(summary, 
+                  -c(`Record Number`,
+                     starts_with('SUPP'))
+)
 ```
 
 
 ```{r}
 # Re-code sex
-ffq <- 
-     ffq %>% 
+summary <- 
+     summary %>% 
+     rename(sex = `Sex (1=male; 2=female)`) %>% 
+     mutate(sex = factor(sex,
+                         labels = c('Male', 'Female')))
+
+detail <- 
+     detail %>% 
      rename(sex = `Sex (1=male; 2=female)`) %>% 
      mutate(sex = factor(sex,
                          labels = c('Male', 'Female')))
@@ -113,9 +156,8 @@ A minimum 10 kcal filter removes 3 participants who it appears minimally complet
 Other ideas for more data cleaning-- check for survey completeness, change sample ID to CHOMP participant ID, quality/sanity checks on data, filter incomplete responses...
 
 ```{r}
-nutrients <- 
-     nutrients %>%
-     filter(`Energy (kcal)` > 10)
+range(summary$`Energy (kcal)`,
+      na.rm = TRUE)
 ```
 
 ## Normalize to kcal intake
@@ -143,9 +185,107 @@ ffq <-
      )
 ```
 
-## Calculate indices
+# Calculate indices
 
 ### FVS
+
+In order to calculate, need to do a few things:
+- Remove entries that shouldn't be counted (i.e. water)
+- Combine food codes duplicated across seasons or settings
+- Filter to only those consumed with a frequency greater than once weekly
+
+```{r}
+# Simplify columns as we don't need nutrients
+fvs <- select(detail, 
+                 study,
+                 subj, 
+                 q_id,
+                 food_id,
+                 food_name,
+                 daily_freq)
+
+fvs
+```
+
+```{r}
+# Remove water 
+
+# Entries this term shows up in:
+filter(fvs,
+       grepl(pattern = '[Ww]ater',
+             food_name)) %>% 
+     pull(food_name) %>% 
+     unique()
+
+# Remove
+fvs <- filter(fvs,
+              !grepl(pattern = '[Ww]ater',
+                     food_name))
+
+dim(fvs)
+```
+
+```{r}
+# How often might a code be repeated?
+fvs %>% 
+     group_by(subj, food_id, food_name) %>% 
+     count() %>% 
+     arrange(desc(n))
+```
+Spot-checked these and even values of up to 6 are reasonable: this would happen if someone added milk to every hot drink, for example. 
+
+What's tricky here is for seasonality, I think I'd want to average, but for different types of "occasions", I'd want to sum. 
+
+```{r}
+# Sum
+# This is most permissive, not accurate for all cases, but just try for now
+
+fvs <- 
+     fvs %>% 
+     group_by(study, subj, food_id, food_name) %>% 
+     summarize(daily_freq = sum(daily_freq))
+
+fvs
+```
+Just for fun-- what's the range of daily frequencies?
+
+```{r}
+ggplot(fvs, aes(x = daily_freq)) +
+     geom_histogram(binwidth = 0.01,
+                    boundary = 0)
+```
+```{r}
+# Filter
+dim(fvs)
+fvs <- filter(fvs,
+              daily_freq >= 1/7) # Greater than once weekly
+dim(fvs)
+```
+
+```{r}
+# Calculate FVS
+fvs <- 
+     fvs %>% 
+     ungroup() %>% 
+     group_by(study, subj) %>% 
+     count(fvs = .)
+
+dim(fvs)
+```
+
+5 participants with missing data.  Think it's these 5 with a FVS of 0
+
+```{r}
+ggplot(fvs, aes(x = study, y = n)) +
+     geom_boxplot() 
+```
+
+```{r}
+fvs %>% 
+     group_by(study) %>% 
+     summarize(range(n))
+```
+
 
 ### DDS
 
