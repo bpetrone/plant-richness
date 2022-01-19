@@ -277,7 +277,10 @@ dim(fvs)
 
 ```{r}
 ggplot(fvs, aes(x = study, y = n)) +
-     geom_boxplot() 
+     geom_boxplot() +
+     labs(y = 'FVS',
+          x = 'Study') +
+     theme(axis.title.x = element_blank())
 ```
 
 ```{r}
@@ -285,7 +288,15 @@ fvs %>%
      group_by(study) %>% 
      summarize(range(n))
 ```
+Mann-Whitney U (Wilcoxon): This “does not estimate the difference in medians (a common misconception) but rather the median of the difference between a sample from x and a sample from y.”
 
+```{r}
+wilcox.test(n ~ study,
+            data = fvs,
+            conf.int = TRUE)
+```
+
+Would be good to inspect a few of these entries and see if they hold.
 
 ### DDS
 
@@ -293,15 +304,20 @@ fvs %>%
 
 ### PDI
 
-## Save
+# Save output
+
+```{r}
+# Join together results from above
+output <- fvs
+```
 
 ```{r}
 write_csv(
-     ffq,
+     output,
      here('data', 
           'processed',
           'DHQ3', 
-          'Adult-1 and Adult-2 FFQ with per-1000-kcal calculated nutrients.csv'
+          'Adult-1 and Adult-2 dietary indices.csv'
           )
 )
 ```
