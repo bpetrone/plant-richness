@@ -17,51 +17,55 @@ library(tidyverse)
 
 # Read in data
 
-## Subject metadata
-
-### Adult-1
-
-```{r}
-
-```
-
-
-### Adult-2
-
-```{r}
-
-```
-
-
-## ASA24
-
-### Adult-1
-
-### Adult-2
-
 ## DHQ3
 
-### Adult-1
+### Summary responses
 
 ```{r}
+# Adult-1
 ffq.adult1 <- 
      here('data', 
           'processed', 
           'Adult-1', 
-          'DHQ3.csv') %>% 
+          'DHQ3_summary.csv') %>% 
      read_csv()
 
 head(ffq.adult1)
 ```
 
-### Adult-2
-
 ```{r}
+# Adult-2
 ffq.adult2 <- 
      here('data', 
           'processed', 
           'Adult-2', 
-          'DHQ3.csv') %>% 
+          'DHQ3_summary.csv') %>% 
+     read_csv()
+
+head(ffq.adult2)
+```
+
+### Detailed responses
+
+```{r}
+# Adult-1
+ffq.adult1 <- 
+     here('data', 
+          'processed', 
+          'Adult-1', 
+          'DHQ3_detail.csv') %>% 
+     read_csv()
+
+head(ffq.adult1)
+```
+
+```{r}
+# Adult-2
+ffq.adult2 <- 
+     here('data', 
+          'processed', 
+          'Adult-2', 
+          'DHQ3_detail.csv') %>% 
      read_csv()
 
 head(ffq.adult2)
@@ -104,8 +108,14 @@ Filtering criteria from Asnicar:
 "Submitted FFQs were excluded if more than 10 food items were left unanswered or if the total energy intake estimate derived from the FFQ as a ratio of the participant’s estimated basal metabolic rate (determined by the Harris–Benedict equation) was more than 2 s.d. outside the mean of this ratio (<0.52 or >2.58)."
 This is for a Harvard FFQ.
 
+A minimum 10 kcal filter removes 3 participants who it appears minimally completed the survey. (Is there a DHQ3-reported parameter that reads this out??)
+
+Other ideas for more data cleaning-- check for survey completeness, change sample ID to CHOMP participant ID, quality/sanity checks on data, filter incomplete responses...
+
 ```{r}
-# TODO: Exclude any subjects based on low calorie intakes??
+nutrients <- 
+     nutrients %>%
+     filter(`Energy (kcal)` > 10)
 ```
 
 ## Normalize to kcal intake
@@ -132,6 +142,16 @@ ffq <-
                    )
      )
 ```
+
+## Calculate indices
+
+### FVS
+
+### DDS
+
+### HEI-2015
+
+### PDI
 
 ## Save
 
