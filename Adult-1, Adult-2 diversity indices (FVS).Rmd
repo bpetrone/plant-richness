@@ -153,20 +153,53 @@ fvs <-
 fvs %>% 
      select(-c(threshold, mean_rare)) %>% 
      distinct() %>% 
-     ggplot(aes(x = fvs, y = mean)) +
+     ggplot(aes(x = fvs_tot, y = mean)) +
      geom_point(size = 2, alpha = 0.8) +
      facet_wrap(~study) +
-     labs(x = 'Food Variety Score',
+     labs(x = 'Food Variety Score\n(all items)',
           y = 'Mean pMR')
 ```
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results',
-#             'manuscript',
-#             '2',
-#             paste0(plotID, '_raw trnL richness x FVS.pdf')),
-#        height = 7, width = 5)
+ggsave(here('results', 
+            'manuscript',
+            '2',
+            paste0(plotID, '_raw trnL richness x total FVS.pdf')),
+       height = 2.5, width = 4)
+```
+
+
+```{r}
+fvs %>% 
+     select(-c(threshold, mean_rare)) %>% 
+     distinct() %>% 
+     group_by(study) %>% 
+     summarize(rho = cor.test(~ fvs_tot + mean,
+                           method = 'spearman')$estimate,
+               p = cor.test(~ fvs_tot + mean,
+                            method = 'spearman')$p.value) 
+            
+```
+
+```{r}
+# Raw data
+fvs %>% 
+     select(-c(threshold, mean_rare)) %>% 
+     distinct() %>% 
+     ggplot(aes(x = fvs_plant, y = mean)) +
+     geom_point(size = 2, alpha = 0.8) +
+     facet_wrap(~study) +
+     labs(x = 'Food Variety Score\n(plant items only)',
+          y = 'Mean pMR')
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '2',
+            paste0(plotID, '_raw trnL richness x plant FVS.pdf')),
+       height = 2.5, width = 4)
 ```
 
 ```{r}
@@ -174,9 +207,9 @@ fvs %>%
      select(-c(threshold, mean_rare)) %>% 
      distinct() %>% 
      group_by(study) %>% 
-     summarize(rho = cor.test(~ fvs + mean,
+     summarize(rho = cor.test(~ fvs_plant + mean,
                            method = 'spearman')$estimate,
-               p = cor.test(~ fvs + mean,
+               p = cor.test(~ fvs_plant + mean,
                             method = 'spearman')$p.value) 
             
 ```
@@ -185,7 +218,7 @@ fvs %>%
 
 ```{r}
 fvs %>% 
-     ggplot(aes(x = fvs, y = mean_rare)) +
+     ggplot(aes(x = fvs_plant, y = mean_rare)) +
      geom_point(size = 2, alpha = 0.8) +
      facet_grid(~study + threshold) +
      labs(x = 'Food Variety Score',
