@@ -336,11 +336,11 @@ fvs %>%
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 
-            'manuscript',
-            '2',
-            paste0(plotID, '_FVS scores by cohort.pdf')),
-       height = 2.5, width = 4)
+# ggsave(here('results', 
+#             'manuscript',
+#             '2',
+#             paste0(plotID, '_FVS scores by cohort.pdf')),
+#        height = 2.5, width = 4)
 ```
 
 Mann-Whitney U (Wilcoxon): This “does not estimate the difference in medians (a common misconception) but rather the median of the difference between a sample from x and a sample from y.”
@@ -363,11 +363,11 @@ ggplot(fvs, aes(x = fvs_tot, y = fvs_plant)) +
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 
-            'manuscript',
-            '2',
-            paste0(plotID, '_Total FVS x plant FVS.pdf')),
-       height = 2.5, width = 4)
+# ggsave(here('results', 
+#             'manuscript',
+#             '2',
+#             paste0(plotID, '_Total FVS x plant FVS.pdf')),
+#        height = 2.5, width = 4)
 ```
 
 
@@ -385,12 +385,72 @@ Would be good to inspect a few of these entries and see if they hold.
 
 ### PDI
 
-# Save output
+# Try residuals
+
+## FVS
 
 ```{r}
 # Join together results from above
 output <- fvs
 ```
+
+```{r}
+# Put energy intake alongside
+output <- 
+     summary %>% 
+     select(study, subj, kcal = `Energy (kcal)`) %>% 
+     full_join(output)
+
+output
+```
+```{r}
+ggplot(output, aes(x = kcal, y = fvs_tot)) +
+     geom_point() +
+     labs(x = 'Energy intake (kcal)',
+          y = 'FVS\n(All items)')
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results',
+#             'manuscript',
+#             '2',
+#             paste0(plotID, '_FVS scores by kcal.pdf')),
+#        height = 2.5, width = 3)
+```
+
+```{r}
+# Linear model (total)
+mod_tot <- lm(fvs_tot ~ kcal, data = output)
+
+# Get input data, for joining back to full results
+resids <- mod_tot$model
+
+# Populate with residuals
+resids$fvs_tot_residual <- resid(mod_tot)
+output <- left_join(output, resids)
+```
+
+```{r}
+# Linear model (plant items)
+mod_plant <- lm(fvs_plant ~ kcal, data = output)
+
+# Get input data, for joining back to full results
+resids <- mod_plant$model
+
+# Populate with residuals
+resids$fvs_plant_residual <- resid(mod_plant)
+output <- left_join(output, resids)
+```
+
+
+```{r}
+# Get residuals and join back to data
+# Start with input values (allows joining back to data)
+
+```
+
+
+# Save output
 
 ```{r}
 write_csv(
