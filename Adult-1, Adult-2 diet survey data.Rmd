@@ -162,19 +162,19 @@ range(summary$`Energy (kcal)`,
 
 ## Normalize to kcal intake
 
-```{r}
+```{r eval = FALSE}
 # Get columns to normalize
 names(ffq)
 ```
 
-```{r}
+```{r eval = FALSE}
 norm.cols <- 
      ffq %>% 
      select(`*Gluten (g)`:`Alcohol drinks`) %>% 
      names()
 ```
 
-```{r}
+```{r eval = FALSE}
 # Calculate estimate of amount per 1000 kcal
 ffq <- 
      ffq %>% 
@@ -251,7 +251,7 @@ Just for fun-- what's the range of daily frequencies?
 
 ```{r}
 ggplot(fvs, aes(x = daily_freq)) +
-     geom_histogram(binwidth = 0.01,
+     geom_histogram(binwidth = 0.10,
                     boundary = 0)
 ```
 ```{r}
@@ -262,38 +262,96 @@ fvs <- filter(fvs,
 dim(fvs)
 ```
 
+#### Label plant foods
+
 ```{r}
-# Calculate FVS
-fvs <- 
+# Save for manual labeling
+
+# fvs %>% 
+#      ungroup %>% 
+#      select(starts_with('food')) %>% 
+#      distinct() %>% 
+#      arrange(food_id) %>% 
+#      write_csv(here('data',
+#                     'processed',
+#                     'DHQ3',
+#                     'Food ID to plant mapping.csv'))
+```
+
+```{r}
+# Read back in 
+plant.items <- 
+     here('data',
+          'processed',
+          'DHQ3',
+          'Food ID to plant mapping.csv') %>% 
+     read_csv()
+```
+
+```{r}
+# Calculate FVS: All food items
+fvs.tot <- 
      fvs %>% 
      ungroup() %>% 
      group_by(study, subj) %>% 
-     count(fvs = .)
-
-dim(fvs)
+     count(name = 'fvs_tot')
 ```
 
-5 participants with missing data.  Think it's these 5 with a FVS of 0
+```{r}
+# Calculate FVS: Plant food items
+fvs.plant <- 
+     fvs %>% 
+     left_join(plant.items) %>% 
+     ungroup() %>% 
+     filter(!is.na(plant)) %>% 
+     group_by(study, subj) %>% 
+     count(name = 'fvs_plant')
+
+dim(fvs.plant)
+```
 
 ```{r}
-ggplot(fvs, aes(x = study, y = n)) +
+fvs <- full_join(fvs.tot, fvs.plant)
+rm(fvs.tot, fvs.plant)
+
+fvs
+```
+```{r}
+# Pivot longer for plotting
+fvs %>% 
+     pivot_longer(cols = starts_with('fvs'),
+                  names_to = 'score',
+                  values_to = 'value') %>% 
+     mutate(score = factor(score,
+                           levels = c('fvs_tot', 
+                                      'fvs_plant'))) %>% 
+     ggplot(aes(x = study, y = value, color = score)) +
      geom_boxplot() +
-     labs(y = 'FVS',
-          x = 'Study') +
+     labs(y = 'Dietary index score') +
      theme(axis.title.x = element_blank())
 ```
 
-```{r}
-fvs %>% 
-     group_by(study) %>% 
-     summarize(range(n))
-```
 Mann-Whitney U (Wilcoxon): This “does not estimate the difference in medians (a common misconception) but rather the median of the difference between a sample from x and a sample from y.”
 
 ```{r}
-wilcox.test(n ~ study,
+# Are the studies significantly different from each other?
+wilcox.test(fvs_plant ~ study,
             data = fvs,
             conf.int = TRUE)
+```
+
+```{r}
+# Are the two measures correlated?
+ggplot(fvs, aes(x = fvs_tot, y = fvs_plant)) +
+     geom_point() +
+     labs(y = 'FVS\n(plant foods)',
+          x = 'FVS\n(all foods)')
+```
+
+```{r}
+cor.test(fvs$fvs_plant,
+         fvs$fvs_tot,
+         method = 'spearman') 
 ```
 
 Would be good to inspect a few of these entries and see if they hold.
