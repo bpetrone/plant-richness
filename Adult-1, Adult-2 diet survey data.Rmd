@@ -327,8 +327,20 @@ fvs %>%
                                       'fvs_plant'))) %>% 
      ggplot(aes(x = study, y = value, color = score)) +
      geom_boxplot() +
-     labs(y = 'Dietary index score') +
+     labs(y = 'Dietary index score', color = 'FVS') +
+     scale_color_manual(values = c('#57606c', '#59a14f'),
+                        labels = c('Total items',
+                                   'Plant items')) +
      theme(axis.title.x = element_blank())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '2',
+            paste0(plotID, '_FVS scores by cohort.pdf')),
+       height = 2.5, width = 4)
 ```
 
 Mann-Whitney U (Wilcoxon): This “does not estimate the difference in medians (a common misconception) but rather the median of the difference between a sample from x and a sample from y.”
@@ -344,9 +356,20 @@ wilcox.test(fvs_plant ~ study,
 # Are the two measures correlated?
 ggplot(fvs, aes(x = fvs_tot, y = fvs_plant)) +
      geom_point() +
+     facet_wrap(~study) +
      labs(y = 'FVS\n(plant foods)',
           x = 'FVS\n(all foods)')
 ```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '2',
+            paste0(plotID, '_Total FVS x plant FVS.pdf')),
+       height = 2.5, width = 4)
+```
+
 
 ```{r}
 cor.test(fvs$fvs_plant,
