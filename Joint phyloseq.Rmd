@@ -130,6 +130,8 @@ sample_data(ps)$study <-
 
 #### Add variables
 
+##### Cycle correction
+
 PCR B cycle number only added once changed from 8 to 10 cycles (early 2021). Populate remaining values with 8 cycles.
 
 ```{r}
@@ -143,6 +145,63 @@ samdf %>%
 ```{r}
 sample_data(ps)$pcrb_cycles[is.na(sample_data(ps)$pcrb_cycles)] <- 8
 ```
+
+##### Study day
+
+Most accurate would be study *date*, but that would take more work. 
+
+```{r}
+# Get sample data
+samdf <- 
+     data.frame(ps@sam_data) %>% 
+     rownames_to_column(var = 'row')
+
+# First, have to split ONR_day into week and weekday
+samdf <- 
+     samdf %>% 
+     mutate(ONR_week = gsub(pattern = 'T|F',
+                            replacement = '',
+                            ONR_day),
+            ONR_weekday = gsub(pattern = '\\d',
+                               replacement = '',
+                               ONR_day),
+            ONR_weekday = ifelse(ONR_weekday == 'T',
+                                 yes = 'Tuesday',
+                                 no = 'Friday')) %>% 
+     select(-ONR_day)
+```
+
+```{r}
+# Calculate study integer day, assuming Monday of week 1 is day 1
+samdf$CH_weekday_i <- 
+     samdf$CH_weekday %>% 
+     factor(levels = c("Monday", "Tuesday", "Wednesday", 
+                       "Thursday", "Friday", "Saturday", "Sunday"),
+            ordered = TRUE) %>% 
+     as.integer()
+
+samdf$ONR_weekday_i <- 
+     samdf$ONR_weekday %>% 
+     factor(levels = c("Monday", "Tuesday", "Wednesday", 
+                       "Thursday", "Friday", "Saturday", "Sunday"),
+            ordered = TRUE) %>% 
+     as.integer()
+
+# Convert types to numeric
+samdf$ONR_week <- as.numeric(samdf$ONR_week)
+
+# Calculate overall study day
+samdf <- 
+     samdf %>% 
+     mutate(CH_day = (7*(CH_week - 1) + CH_weekday_i),
+            ONR_day = (7*(ONR_week - 1) + ONR_weekday_i))
+```
+
+```{r}
+# Replace in phyloseq object
+sample_data(ps) <- column_to_rownames(samdf, var = 'row')
+```
+
 
 ### Filter
 
