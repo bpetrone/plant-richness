@@ -84,16 +84,46 @@ detail.adult2 <-
 head(detail.adult2)
 ```
 
+### Calculated PDI
+
+This is done individually in CHOMP and ONR project notebooks, and then loaded here.
+
+```{r}
+# Adult-1
+pdi.adult1 <-
+     here('data', 
+          'processed', 
+          'Adult-1', 
+          'PDI scores by subject.csv') %>% 
+     read_csv()
+
+head(pdi.adult1)
+```
+
+```{r}
+# Adult-2
+pdi.adult2 <-
+     here('data', 
+          'processed', 
+          'Adult-2', 
+          'PDI scores by subject.csv') %>% 
+     read_csv()
+
+head(pdi.adult2)
+```
+
 # Pre-process
 
 ```{r}
 # Add study variable
-
 summary.adult1$study <- 'Adult-1'
 summary.adult2$study <- 'Adult-2'
 
 detail.adult1$study <- 'Adult-1'
 detail.adult2$study <- 'Adult-2'
+
+pdi.adult1$study <- 'Adult-1'
+pdi.adult2$study <- 'Adult-2'
 ```
 
 
@@ -106,6 +136,10 @@ summary <-
 detail <- 
      bind_rows(detail.adult1, detail.adult2) %>% 
      select(study, everything())
+
+pdi <- 
+     bind_rows(pdi.adult1, pdi.adult2) %>% 
+     select(study, everything())
 ```
 
 ```{r}
@@ -113,7 +147,9 @@ detail <-
 rm(summary.adult1, 
    summary.adult2,
    detail.adult1, 
-   detail.adult2)
+   detail.adult2,
+   pdi.adult1,
+   pdi.adult2)
 ```
 
 ## Tidy
@@ -125,7 +161,6 @@ summary <- select(summary,
                      starts_with('SUPP'))
 )
 ```
-
 
 ```{r}
 # Re-code sex
@@ -140,6 +175,14 @@ detail <-
      rename(sex = `Sex (1=male; 2=female)`) %>% 
      mutate(sex = factor(sex,
                          labels = c('Male', 'Female')))
+```
+
+
+```{r}
+# Make labels plot-friendly
+names(pdi)[names(pdi) == 'pdi'] <- 'PDI'
+names(pdi)[names(pdi) == 'hpdi'] <- 'hPDI'
+names(pdi)[names(pdi) == 'updi'] <- 'uPDI'
 ```
 
 ## QC and filter
@@ -164,25 +207,25 @@ range(summary$`Energy (kcal)`,
 
 ```{r eval = FALSE}
 # Get columns to normalize
-names(ffq)
+# names(ffq)
 ```
 
 ```{r eval = FALSE}
-norm.cols <- 
-     ffq %>% 
-     select(`*Gluten (g)`:`Alcohol drinks`) %>% 
-     names()
+# norm.cols <- 
+#      ffq %>% 
+#      select(`*Gluten (g)`:`Alcohol drinks`) %>% 
+#      names()
 ```
 
 ```{r eval = FALSE}
 # Calculate estimate of amount per 1000 kcal
-ffq <- 
-     ffq %>% 
-     mutate(across(one_of(norm.cols),
-                   ~ .x/`Energy (kcal)`*1000,
-                   .names = '{.col}_per_1000kcal'
-                   )
-     )
+# ffq <- 
+#      ffq %>% 
+#      mutate(across(one_of(norm.cols),
+#                    ~ .x/`Energy (kcal)`*1000,
+#                    .names = '{.col}_per_1000kcal'
+#                    )
+#      )
 ```
 
 # Calculate indices
@@ -197,16 +240,15 @@ In order to calculate, need to do a few things:
 ```{r}
 # Simplify columns as we don't need nutrients
 fvs <- select(detail, 
-                 study,
-                 subj, 
-                 q_id,
-                 food_id,
-                 food_name,
-                 daily_freq)
+              study,
+              subj, 
+              q_id,
+              food_id,
+              food_name,
+              daily_freq)
 
 fvs
 ```
-
 ```{r}
 # Remove water 
 
@@ -383,16 +425,53 @@ Would be good to inspect a few of these entries and see if they hold.
 
 ### HEI-2015
 
+```{r}
+hei <- select(summary, 
+              study, 
+              subj,
+              matches('HEI'))
+
+names(hei)
+```
+
+```{r}
+hei <- 
+     hei %>% 
+     rename(hei_tot = 'Total HEI-2015 Score',
+            hei_veg = 'HEI-2015 - Total Vegetables - Component Score',
+            hei_greensbeans = 'HEI-2015 - Greens and Beans - Component Score',
+            hei_fruit = 'HEI-2015 - Total Fruits - Component Score',
+            hei_wholefruits = 'HEI-2015 - Whole Fruits - Component Score',
+            hei_grain = 'HEI-2015 - Whole Grains - Component Score') %>% 
+     # Make custom plant column
+     mutate(hei_plant_all = hei_veg + hei_greensbeans + hei_fruit + 
+                 hei_wholefruits + hei_grain,
+            hei_non_plant = hei_tot - hei_plant_all)
+
+hei
+```
+
 ### PDI
 
-# Try residuals
+Nothing to do here: processing already done in external notebooks.
 
-## FVS
+# Join together
 
 ```{r}
 # Join together results from above
-output <- fvs
+output <- 
+     select(hei, 
+            study,
+            subj,
+            hei_plant_all,
+            hei_non_plant) %>% 
+     full_join(fvs, by = c('subj', 'study')) %>% 
+     full_join(select(pdi, study:uPDI), by = c('subj', 'study'))
 ```
+
+## Try residuals
+
+### FVS
 
 ```{r}
 # Put energy intake alongside
@@ -441,14 +520,6 @@ resids <- mod_plant$model
 resids$fvs_plant_residual <- resid(mod_plant)
 output <- left_join(output, resids)
 ```
-
-
-```{r}
-# Get residuals and join back to data
-# Start with input values (allows joining back to data)
-
-```
-
 
 # Save output
 
