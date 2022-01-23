@@ -1,0 +1,83 @@
+---
+title: "Adult-1, Adult-2 subsampling"
+output: html_notebook
+---
+
+# Setup
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(here)
+library(tidyverse)
+```
+
+```{r}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 5),
+                    axis.title = element_text(size = 7,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 7,
+                                              face = 'bold')
+                     )
+)
+```
+
+# Read in data
+
+## trnL
+
+Note this is already trimmed to only those taxa identified to a food species, with duplicated taxa collapsed.
+```{r}
+# Read in last saved phyloseq
+ps <- 
+     here('data', 
+          'processed', 
+          'phyloseq', 
+          'trnL_combined_ps.rds') %>% 
+     readRDS()
+
+ps
+```
+
+### Rarefied 
+
+```{r}
+rare.df <- 
+     here('data', 
+          'processed', 
+          'rarefaction',
+          'Rarefied trnL counts.rds') %>% 
+     readRDS
+
+rare.df
+```
+
+### Cumulative 
+
+```{r}
+cumulative.df <- 
+     here('data',
+          'processed',
+          'accumulation',
+          'Adult-1 and Adult-2 cumulative taxon counts.csv') %>% 
+     read_csv()
+```
+
+## Dietary indices (FFQ)
+
+```{r}
+ffq <- 
+     here('data', 
+          'processed',
+          'DHQ3', 
+          'Adult-1 and Adult-2 dietary indices.csv'
+          ) %>% 
+     read_csv()
+```
+
