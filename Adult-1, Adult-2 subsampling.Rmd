@@ -12,6 +12,7 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 
 ```{r libraries, include=FALSE, echo=FALSE}
 library(here)
+library(phyloseq)
 library(tidyverse)
 ```
 
@@ -19,10 +20,10 @@ library(tidyverse)
 # Plotting themes
 theme_set(theme_bw() +
                theme(
-                    axis.text = element_text(size = 5),
-                    axis.title = element_text(size = 7,
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
                                               face = 'bold'),
-                    strip.text = element_text(size = 7,
+                    strip.text = element_text(size = 14,
                                               face = 'bold')
                      )
 )
@@ -57,7 +58,6 @@ rare.df <-
 
 rare.df
 ```
-
 ### Cumulative 
 
 ```{r}
@@ -79,5 +79,977 @@ ffq <-
           'Adult-1 and Adult-2 dietary indices.csv'
           ) %>% 
      read_csv()
+```
+
+# Pre-process
+
+### Filter phyloseq
+
+```{r}
+# Filter to Adult-1 and -2 cohorts only
+ps <- 
+     ps %>% 
+     subset_samples(study %in% c('Adult-1', 'Adult-2')) %>% 
+     prune_taxa(taxa_sums(.) > 0, .)
+
+ps
+```
+
+```{r}
+alpha <- 
+     rare.df %>% 
+     filter(grepl(name, pattern = 'CHOMP|ONR') )
+```
+
+```{r}
+# Add in sample metadata
+
+# Populate with sample data
+add <- 
+     ps@sam_data %>%
+     data.frame() %>% 
+     rownames_to_column(var = 'row') %>% 
+     select(row, study, subj, CH_week, ONR_day) 
+
+alpha <- 
+    left_join(alpha, add,
+              by = c('name' = 'row'))
+
+alpha
+```
+### Dietary indices
+
+Prune to just those that will be tested below.
+```{r}
+ffq <- 
+     ffq %>% 
+     select(study, 
+            subj,
+            hei_plant_all,
+            hPDI,
+            fvs_plant_residual)
+
+ffq
+```
+
+# Subsampling
+
+First, want to enumerate sampling schemes.
+- 1: One sample, anytime
+- 2: Two consecutive samples (adjacent days)-- ADULT-1 ONLY
+- 3: NHANES spacing: two samples spaced between 3-10 days apart
+- 4: 3 weeks of weekly samples
+- 5: 4 " " " "-- ADULT-1 ONLY
+- 6: 5 " " " "-- ADULT-1 ONLY
+- 7: 6 " " " " -- ADULT-1 ONLY
+
+## Adult-1 
+
+```{r}
+# Get sample data (need downstream)
+samdf <- 
+     ps@sam_data %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'row') %>% 
+     filter(study == 'Adult-1')
+     
+# Get observed richness
+alpha.1 <- 
+     alpha %>% 
+     select(-c(threshold, obs_rare, se)) %>% 
+     filter(study == 'Adult-1') %>% 
+     distinct()
+```
+
+```{r}
+# For storing results
+results.df.1 <- data.frame(
+     scheme = NULL, 
+     study = NULL,
+     index = NULL,
+     rho = NULL,
+     p = NULL)
+```
+
+#### Scheme 1
+
+Note that this will cover duplicated sample sets as i gets closer to 18, but can detect and remove them downstream.
+```{r}
+# Do scheme 1 first: 1 sample from each participant
+set.seed(1222022)
+
+for (iter in (1:100)){
+     # Make subsampled, merged phyloseq
+     samples <- 
+          alpha.1 %>% 
+          group_by(subj) %>% 
+          slice_sample(n = 1) %>% 
+          pull(name)
+     
+     # Join to FVS
+     alpha.temp <- 
+          alpha.1 %>% 
+          filter(name %in% samples) %>% 
+          left_join(ffq, by = 'subj')
+     
+     # Calculate correlation:
+     # For HEI plant:
+     suppressWarnings(spearman <- cor.test(alpha.temp$obs, 
+                                           alpha.temp$hei_plant_all,
+                                           method = 'spearman'))
+     # Update results dataframe
+     row <- c(1, 
+              'Adult-1', 
+              'HEI plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.1 <- bind_rows(results.df.1, row)
+     
+     # For pDI: 
+     suppressWarnings(spearman <- cor.test(alpha.temp$obs, 
+                                           alpha.temp$hPDI,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(1, 
+              'Adult-1', 
+              'hPDI',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.1 <- bind_rows(results.df.1, row)
+     
+     # For FVS plant:
+     suppressWarnings(spearman <- cor.test(alpha.temp$obs, 
+                                           alpha.temp$fvs_plant_residual,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(1, 
+              'Adult-1', 
+              'FVS plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.1 <- bind_rows(results.df.1, row)
+}
+```
+
+#### 2
+
+Scheme 2: Two consecutive daily samples
+My idea here would be first to subset to only the samples that I already know have one adjacent to them.  Then, at each iteration, could randomly pick one sample per participant, and then randomly pick one of its adjoining samples.
+
+```{r}
+# Make a sample "distance matrix"
+d <- 
+     dist(samdf$CH_day) %>% 
+     as.matrix() 
+
+colnames(d) <- rownames(d) <- samdf$row
+```
+
+```{r}
+adjacent <- list()
+for (s in unique(samdf$subj)){
+     # For each subject, make a list of samples that are adjacent to at least 
+     # one other sample
+     
+     # Get all the samples for that subject
+     samples <- 
+          filter(samdf,
+                 subj == s) %>% 
+          pull(row)
+     
+     # Subset the distance matrix
+     d.temp <- d[samples, samples]
+     
+     # Pull any column that has a 1 (indicating a consecutive day from at least
+     # one other subject)
+     adjacent[[s]] <- 
+          apply(d.temp, 2, function(x){any(x == 1)}) %>% 
+          which() %>% 
+          names()
+}
+```
+
+```{r}
+# How many subjects have at least one consecutive sample?
+lapply(adjacent, length) %>% 
+     unlist()
+```
+
+```{r}
+# Drop those without
+adjacent <- 
+     adjacent[lapply(adjacent, 
+                     function(x){length(x) > 0}) %>% 
+                   unlist()]
+
+length(adjacent)
+```
+
+Okay, so now want to calculate correlation from here. 
+```{r}
+set.seed(1232022)
+
+for (iter in (1:100)){
+     adjacent.df <- data.frame()
+     for (s in names(adjacent)){
+          # Randomly sample one of that subject's samples
+          s1 <- sample(adjacent[[s]],
+                       size = 1)
+          
+          # Subset the distance matrix to only that subject's samples
+          d.temp <- d[s1, adjacent[[s]]]
+          s2s <- 
+               which(d.temp == 1) %>% 
+               names()
+               
+          # Find another sample that's 1 day away in distance
+          s2 <- sample(s2s, size = 1)
+          
+          # Pull observed values, calculate mean, join to FFQ
+          alpha.temp <- 
+               alpha.1 %>% 
+               filter(name %in% c(s1, s2)) %>% 
+               group_by(subj) %>% 
+               summarize(mean_obs = mean(obs)) %>% 
+               left_join(ffq, by = c('subj'))
+          
+          # Add to the running list of values for this iteration
+          adjacent.df <- bind_rows(adjacent.df,
+                                   alpha.temp)
+     }
+          
+     # Calculate correlation
+     # For HEI plant:
+     suppressWarnings(spearman <- cor.test(adjacent.df$mean_obs, 
+                                           adjacent.df$hei_plant_all,
+                                           method = 'spearman'))
+     # Update results dataframe
+     row <- c(2, 
+              'Adult-1', 
+              'HEI plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.1 <- bind_rows(results.df.1, row)
+     
+     # For pDI: 
+     suppressWarnings(spearman <- cor.test(adjacent.df$mean_obs, 
+                                           adjacent.df$hPDI,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(2, 
+              'Adult-1', 
+              'hPDI',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.1 <- bind_rows(results.df.1, row)
+     
+     # For FVS plant:
+     suppressWarnings(spearman <- cor.test(adjacent.df$mean_obs, 
+                                           adjacent.df$fvs_plant_residual,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(2, 
+              'Adult-1', 
+              'FVS plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.1 <- bind_rows(results.df.1, row)
+}
+```
+
+#### 3
+
+```{r}
+nhanes <- list()
+for (s in unique(samdf$subj)){
+     # For each subject, make a list of samples that are 3-10 days from least 
+     # one other sample
+     
+     # Get all the samples for that subject
+     samples <- 
+          filter(samdf,
+                 subj == s) %>% 
+          pull(row)
+     
+     # Subset the distance matrix
+     d.temp <- d[samples, samples]
+     
+     # Pull any column that has a 1 (indicating a consecutive day from at least
+     # one other subject)
+     nhanes[[s]] <- 
+          apply(d.temp, 2, function(x){any(x %in% 3:10)}) %>% 
+          which() %>% 
+          names()
+}
+```
+
+```{r}
+# Unlike adjacent sampling, this includes all subjects
+length(nhanes)
+```
+
+Okay, so now want to calculate correlation from here. 
+```{r}
+set.seed(1232022)
+
+for (iter in (1:100)){
+     nhanes.df <- data.frame()
+     for (s in names(nhanes)){
+          # Randomly sample one of that subject's samples
+          s1 <- sample(nhanes[[s]],
+                       size = 1)
+          
+          # Subset the distance matrix to only that subject's samples
+          d.temp <- d[s1, nhanes[[s]]]
+          s2s <- names(d.temp)[d.temp %in% 3:10]
+               
+          # Find another sample that's 1 day away in distance
+          s2 <- sample(s2s, size = 1)
+          
+          # Pull observed values, calculate mean, join to FVS
+          alpha.temp <- 
+               alpha.1 %>% 
+               filter(name %in% c(s1, s2)) %>% 
+               group_by(subj) %>% 
+               summarize(mean_obs = mean(obs)) %>% 
+               left_join(ffq, by = c('subj'))
+          
+          # Add to the running list of values for this iteration
+          nhanes.df <- bind_rows(nhanes.df,
+                                 alpha.temp)
+     }
+          
+     # Calculate correlation
+     # HEI plant
+     # Common warning: cannot compute exact p-value with ties
+     suppressWarnings(spearman <- cor.test(nhanes.df$mean_obs, 
+                                           nhanes.df$hei_plant_all,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(3, 
+              'Adult-1', 
+              'HEI plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.1 <- bind_rows(results.df.1, row)
+     
+     # hPDI
+     suppressWarnings(spearman <- cor.test(nhanes.df$mean_obs, 
+                                           nhanes.df$hPDI,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(3, 
+              'Adult-1', 
+              'hPDI',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.1 <- bind_rows(results.df.1, row)
+     
+     # FVS plant
+     suppressWarnings(spearman <- cor.test(nhanes.df$mean_obs, 
+                                           nhanes.df$fvs_plant_residual,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(3, 
+              'Adult-1', 
+              'FVS plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.1 <- bind_rows(results.df.1, row)
+}
+```
+
+#### 4 through 7 (weekly)
+
+```{r}
+# Schemes 4-7 (3 to 6 weeks of weekly sampling)
+set.seed(1232021)
+
+for (i in 3:6){ # Number of samples (only from separate weeks)
+     for (iter in (1:100)){
+          # Subsample
+          samples <- 
+               alpha.1 %>% 
+               group_by(subj, CH_week) %>% 
+               slice_sample(n = 1) %>% # Pick one sample from each week at random
+               ungroup() # 6 random weekly samples
+
+          # Now, based on # samples needed, randomly sample a starting week
+          # that will provide the right number of consecutive samples
+          # 3: start_week from 1 to 4
+          # 4: start_week from 1 to 3
+          # 5: start_week from 1 to 2
+          # 6: start_week is 1
+          
+          start_week_max <- 6 - i + 1
+          samples_start <- 
+               samples %>% 
+               filter(CH_week <= start_week_max) %>% 
+               group_by(subj) %>% 
+               arrange(subj, CH_week) %>% 
+               slice_sample(n = 1) %>% 
+               select(subj, 
+                      CH_week_start = CH_week)
+          
+          # Now join back to randomly selected samples
+          samples <- 
+               samples %>% 
+               left_join(samples_start, by = 'subj') %>% 
+               # Choose the right number of weeks
+               filter(CH_week >= CH_week_start & 
+                           CH_week < CH_week_start + i) %>% 
+               # Pull sample names
+               pull(name)
+          
+          # Pull observed values, calculate mean, join to FVS
+          alpha.temp <- 
+               alpha.1 %>% 
+               filter(name %in% samples) %>% 
+               group_by(subj) %>% 
+               summarize(mean_obs = mean(obs)) %>% 
+               left_join(ffq, by = c('subj'))
+          
+          # Calculate correlation
+          # HEI plant
+          suppressWarnings(spearman <- cor.test(alpha.temp$mean_obs, 
+                                                alpha.temp$hei_plant_all,
+                                                method = 'spearman'))
+          
+          # Update results dataframe
+          row <- c(i + 1, 
+                   'Adult-1', 
+                   'HEI plant',
+                   spearman$estimate, 
+                   spearman$p.value)
+          names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+          results.df.1 <- bind_rows(results.df.1, row)
+          
+          # hPDI
+          suppressWarnings(spearman <- cor.test(alpha.temp$mean_obs, 
+                                                alpha.temp$hPDI,
+                                                method = 'spearman'))
+          
+          # Update results dataframe
+          row <- c(i + 1, 
+                   'Adult-1', 
+                   'hPDI',
+                   spearman$estimate, 
+                   spearman$p.value)
+          names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+          results.df.1 <- bind_rows(results.df.1, row)
+          
+          # FVS plant
+          suppressWarnings(spearman <- cor.test(alpha.temp$mean_obs, 
+                                                alpha.temp$fvs_plant_residual,
+                                                method = 'spearman'))
+          
+          # Update results dataframe
+          row <- c(i + 1, 
+                   'Adult-1', 
+                   'FVS plant',
+                   spearman$estimate, 
+                   spearman$p.value)
+          names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+          results.df.1 <- bind_rows(results.df.1, row)
+     }
+}
+```
+
+## Adult 2
+
+Same as above, except can only do schemes:
+- 1: One sample, anytime
+- 3: NHANES spacing: two samples spaced between 3-10 days apart
+- 4: 3 weeks of weekly samples
+
+
+```{r}
+# Get sample data (need downstream)
+samdf <- 
+     ps@sam_data %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'row') %>% 
+     filter(study == 'Adult-2')
+     
+# Get observed richness
+alpha.2 <- 
+     alpha %>% 
+     select(-c(threshold, obs_rare, se)) %>% 
+     filter(study == 'Adult-2') %>% 
+     distinct()
+```
+
+```{r}
+# For storing results
+results.df.2 <- data.frame(
+     scheme = NULL, 
+     study = NULL,
+     index = NULL,
+     rho = NULL,
+     p = NULL)
+```
+
+####  1
+
+```{r}
+# Do scheme 1 first: 1 sample from each participant
+set.seed(1222022)
+
+for (iter in (1:100)){
+     # Make subsampled, merged phyloseq
+     samples <- 
+          alpha.2 %>% 
+          group_by(subj) %>% 
+          slice_sample(n = 1) %>% 
+          pull(name)
+     
+     # Join to FVS
+     alpha.temp <- 
+          alpha.2 %>% 
+          filter(name %in% samples) %>% 
+          left_join(ffq, by = 'subj')
+     
+     # Calculate correlation:
+     # For HEI plant:
+     suppressWarnings(spearman <- cor.test(alpha.temp$obs, 
+                                           alpha.temp$hei_plant_all,
+                                           method = 'spearman'))
+     # Update results dataframe
+     row <- c(1, 
+              'Adult-2', 
+              'HEI plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.2 <- bind_rows(results.df.2, row)
+     
+     # For pDI: 
+     suppressWarnings(spearman <- cor.test(alpha.temp$obs, 
+                                           alpha.temp$hPDI,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(1, 
+              'Adult-2', 
+              'hPDI',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.2 <- bind_rows(results.df.2, row)
+     
+     # For FVS plant:
+     suppressWarnings(spearman <- cor.test(alpha.temp$obs, 
+                                           alpha.temp$fvs_plant_residual,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(1, 
+              'Adult-2', 
+              'FVS plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.2 <- bind_rows(results.df.2, row)
+}
+```
+
+### 3
+
+```{r}
+# Make a sample "distance matrix"
+d <- 
+     dist(samdf$ONR_day) %>% 
+     as.matrix() 
+
+colnames(d) <- rownames(d) <- samdf$row
+```
+
+```{r}
+nhanes <- list()
+for (s in unique(samdf$subj)){
+     # For each subject, make a list of samples that are 3-10 days from least 
+     # one other sample
+     
+     # Get all the samples for that subject
+     samples <- 
+          filter(samdf,
+                 subj == s) %>% 
+          pull(row)
+     
+     # Subset the distance matrix
+     d.temp <- d[samples, samples]
+     
+     # Pull any column that has a 1 (indicating a consecutive day from at least
+     # one other subject)
+     nhanes[[s]] <- 
+          apply(d.temp, 2, function(x){any(x %in% 3:10)}) %>% 
+          which() %>% 
+          names()
+}
+```
+
+```{r}
+# Unlike adjacent sampling, this includes all subjects
+length(nhanes)
+```
+
+Okay, so now want to calculate correlation from here. 
+```{r}
+set.seed(1232022)
+
+for (iter in (1:100)){
+     nhanes.df <- data.frame()
+     for (s in names(nhanes)){
+          # Randomly sample one of that subject's samples
+          s1 <- sample(nhanes[[s]],
+                       size = 1)
+          
+          # Subset the distance matrix to only that subject's samples
+          d.temp <- d[s1, nhanes[[s]]]
+          s2s <- names(d.temp)[d.temp %in% 3:10]
+               
+          # Find another sample that's 1 day away in distance
+          s2 <- sample(s2s, size = 1)
+          
+          # Pull observed values, calculate mean, join to FVS
+          alpha.temp <- 
+               alpha.2 %>% 
+               filter(name %in% c(s1, s2)) %>% 
+               group_by(subj) %>% 
+               summarize(mean_obs = mean(obs)) %>% 
+               left_join(ffq, by = c('subj'))
+          
+          # Add to the running list of values for this iteration
+          nhanes.df <- bind_rows(nhanes.df,
+                                 alpha.temp)
+     }
+          
+     # Calculate correlation
+     # HEI plant
+     # Common warning: cannot compute exact p-value with ties
+     suppressWarnings(spearman <- cor.test(nhanes.df$mean_obs, 
+                                           nhanes.df$hei_plant_all,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(3, 
+              'Adult-2', 
+              'HEI plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.2 <- bind_rows(results.df.2, row)
+     
+     # hPDI
+     suppressWarnings(spearman <- cor.test(nhanes.df$mean_obs, 
+                                           nhanes.df$hPDI,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(3, 
+              'Adult-2', 
+              'hPDI',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.2 <- bind_rows(results.df.2, row)
+     
+     # FVS plant
+     suppressWarnings(spearman <- cor.test(nhanes.df$mean_obs, 
+                                           nhanes.df$fvs_plant_residual,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(3, 
+              'Adult-2', 
+              'FVS plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.2 <- bind_rows(results.df.2, row)
+}
+```
+
+#### 4 
+
+```{r}
+# Scheme 4 (3 weeks of weekly sampling)
+# Can hard code values here, because for ONR it amounts to one per week
+set.seed(1232021)
+
+for (iter in (1:100)){
+     # Subsample
+     samples <- 
+          samdf %>% 
+          group_by(subj, ONR_week) %>% 
+          slice_sample(n = 1) %>% # Pick one sample from each week at random
+          ungroup() %>%  # 3 random weekly samples
+          pull(row)
+     
+     # Here, this is all we need: 3 consecutive weeks
+     # Pull observed values, calculate mean, join to FVS
+     alpha.temp <- 
+          alpha.2 %>% 
+          filter(name %in% samples) %>% 
+          group_by(subj) %>% 
+          summarize(mean_obs = mean(obs)) %>% 
+          left_join(ffq, by = c('subj'))
+     
+     # Calculate correlation
+     # HEI plant
+     suppressWarnings(spearman <- cor.test(alpha.temp$mean_obs, 
+                                           alpha.temp$hei_plant_all,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(4, 
+              'Adult-2', 
+              'HEI plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.2 <- bind_rows(results.df.2, row)
+     
+     # hPDI
+     suppressWarnings(spearman <- cor.test(alpha.temp$mean_obs, 
+                                           alpha.temp$hPDI,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(4, 
+              'Adult-2', 
+              'hPDI',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.2 <- bind_rows(results.df.2, row)
+     
+     # FVS plant
+     suppressWarnings(spearman <- cor.test(alpha.temp$mean_obs, 
+                                           alpha.temp$fvs_plant_residual,
+                                           method = 'spearman'))
+     
+     # Update results dataframe
+     row <- c(4, 
+              'Adult-2', 
+              'FVS plant',
+              spearman$estimate, 
+              spearman$p.value)
+     names(row) <- c('scheme', 'study', 'index', 'rho', 'p')
+     results.df.2 <- bind_rows(results.df.2, row)
+}
+
+```
+
+## Summarize and plot
+
+```{r}
+# Join
+results.df <- 
+     bind_rows(results.df.1,
+               results.df.2)
+
+rm(results.df.1,
+   results.df.2)
+```
+
+```{r}
+# Remove duplicates
+dim(results.df)
+results.df <- distinct(results.df)
+dim(results.df) 
+```
+
+```{r}
+cols = c('scheme', 'rho', 'p')
+results.df <- 
+     mutate(results.df,
+            across(one_of(cols),
+            ~ as.numeric(.x)))
+```
+
+```{r}
+# Intercept: get from full dataset
+alpha <- 
+     alpha %>% 
+     select(-c(threshold, obs_rare, se)) %>% 
+     distinct() %>% 
+     group_by(study, subj) %>% 
+     summarize(mean_obs = mean(obs)) %>% 
+     full_join(ffq)
+
+alpha
+```
+```{r}
+# Differences from reported due to filtering
+alpha %>% 
+     group_by(study) %>% 
+     summarize(rho = cor.test(~ mean_obs + hei_plant_all,
+                              method = 'spearman')$estimate,
+               p = cor.test(~ mean_obs + hei_plant_all,
+                            method = 'spearman')$p.value)
+```
+
+```{r}
+alpha %>% 
+     group_by(study) %>% 
+     summarize(rho = cor.test(~ mean_obs + hPDI,
+                              method = 'spearman')$estimate,
+               p = cor.test(~ mean_obs + hPDI,
+                            method = 'spearman')$p.value)
+```
+
+```{r}
+alpha %>% 
+     group_by(study) %>% 
+     summarize(rho = cor.test(~ mean_obs + fvs_plant_residual,
+                              method = 'spearman')$estimate,
+               p = cor.test(~ mean_obs + fvs_plant_residual,
+                            method = 'spearman')$p.value)
+```
+
+```{r}
+rho.df <- 
+     data.frame(
+          study = rep(c('Adult-1', 'Adult-2'), 3),
+          index = c(rep('HEI plant', 2),
+                    rep('hPDI', 2),
+                    rep('FVS plant', 2)),
+          rho_full = c(0.4679278, # Adult-1 HEI plant
+                       0.3130806, # Adult-2 HEI plant
+                       0.5300824, # Adult-1 hPDI
+                       0.4227946, # Adult-2 hPDI
+                       0.5214177, # Adult-1 FVS
+                       0.5177104) # Adult-2 FVS
+     )
+rho.df
+```
+```{r}
+# Join to results
+results.df <- 
+     left_join(results.df, rho.df)
+```
+
+```{r}
+# Refactor for plotting
+results.df$index <- 
+     factor(results.df$index,
+            levels = c('FVS plant',
+                       'hPDI',
+                       'HEI plant'),
+            labels = c('FVS (plant)',
+                       'hPDI',
+                       'HEI (plant)'))
+```
+
+```{r}
+# Sampling scheme labels:
+schemes <- 
+     c('Single sample',
+       'Two samples (1d apart)', 
+       'Two samples (3-10d apart)',
+       'Three samples (1/wk)',
+       'Four samples (1/wk)',
+       'Five samples (1/wk)',
+       'Six samples (1/wk)')
+```
+
+```{r}
+# Plot
+ggplot(results.df, aes(x = scheme, y = rho, group = scheme)) +
+     geom_hline(yintercept = 0,
+                linetype = 'dotted',
+                color = 'gray',
+                size = 1) +
+     geom_hline(aes(yintercept = rho_full),
+                linetype = 'dotted',
+                color = '#8CD17D',
+                size = 1) +
+     geom_boxplot() +
+     facet_grid(cols = vars(index),
+                rows = vars(study)) +
+     scale_x_continuous(breaks = 1:7,
+                        labels = schemes) +
+     labs(y = 'Spearman *rho*', x = 'Sampling scheme') +
+     theme(axis.title.y = ggtext::element_markdown(),
+           axis.text.x = element_text(angle = 40, 
+                                      hjust = 1,
+                                      size = 9),
+           panel.grid.minor.x = element_blank())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '4',
+            paste0(plotID, '_Sampling schemes, Spearman rho.pdf')),
+       height = 5, width = 8)
+```
+
+```{r}
+# Plot
+ggplot(results.df, aes(x = scheme, y = p, group = scheme)) +
+     geom_boxplot() +
+     geom_hline(yintercept = 0.05,
+                linetype = 'dotted',
+                color = '#E15759',
+                size = 1) +
+     facet_grid(cols = vars(index),
+                rows = vars(study)) +
+     labs(y = 'Spearman *p*', x = 'Sampling scheme') +
+     scale_x_continuous(breaks = 1:7,
+                        labels = schemes) +
+     scale_y_log10() +
+     theme(axis.title.y = ggtext::element_markdown(),
+           axis.text.x = element_text(angle = 40,
+                                      hjust = 1,
+                                      size = 9),
+           panel.grid.minor.x = element_blank())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '4',
+            paste0(plotID, '_Sampling schemes, Spearman p.pdf')),
+       height = 5, width = 8)
+```
+
+Alternative visualization
+
+```{r}
+results.df %>% 
+     mutate(scheme = factor(scheme)) %>% 
+     ggplot(aes(x = p, y = rho, color = scheme)) +
+     geom_point(alpha = 0.2) +
+     facet_grid(rows = vars(study),
+                cols = vars(index))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '4',
+            paste0(plotID, '_Visualizing rho and p together.pdf')),
+       height = 5, width = 6)
 ```
 
