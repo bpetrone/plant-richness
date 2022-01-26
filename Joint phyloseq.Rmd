@@ -53,7 +53,7 @@ ps.dfc <-
      here('data', 
           'processed',
           'phyloseq', 
-          '20211116_ps_trnL_DFC.rds') %>% 
+          '20220126_ps_trnL_DFC.rds') %>% 
      readRDS()
 
 ps.dfc
