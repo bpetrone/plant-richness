@@ -157,6 +157,24 @@ cyano
 db.df <- bind_rows(db.df, cyano)
 ```
 
+# Statistics
+
+How many distinct taxa?
+
+```{r}
+db.df %>% 
+     select(-seq) %>% 
+     MButils::lowest_level() %>% 
+     pull(name) %>% 
+     n_distinct()
+```
+
+How many unique sequences?
+
+```{r}
+n_distinct(db.df$seq)
+```
+
 # Visualize taxa
 
 ## Metacoder tree
@@ -325,6 +343,31 @@ heat_tree(x,
 
 ### Possible v actual detection
 
+#### Make full tree from reference
+
+- Group by sequence (including subsequences: Remember that in current version (2021/08/25) some sequences have primers and some don't.  Because of this, can't search by exact matching)
+- Do last common ancestor
+- Get "full" taxonomy
+- Extend phyloseq object
+
+```{r}
+# Label substrings
+seqs <- db.df$seq
+
+substring <- function(s){
+     # Remove s from the current list of strings to be considered
+     seqs.temp <- seqs[seqs!=s]
+     # Now check this list for membership
+     any(str_detect(pattern = s,
+                string = seqs.temp))
+}
+
+db.df$ss <- 
+     lapply(db.df$seq,
+            substring) %>% 
+     unlist()
+```
+
 #### Add possible taxa
 
 Here, need to add empty rows to phyloseq object and corresponding taxonomy for everything that could have potentially been detected by the reference.  
@@ -335,7 +378,26 @@ taxtab <- ps@tax_table@.Data
 ```
 
 ```{r}
-add <- db.df$seq[!(db.df$seq %in% colnames(asvtab))]
+# Pull only sequences that don't have an ASV table sequence as a substring
+
+add <- c()
+
+for (s in db.df$seq){
+     ss <- 
+          lapply(colnames(asvtab),
+                  function(x){str_detect(pattern = x,
+                                         string = s)}) %>% 
+          unlist() %>% 
+          any()
+     
+     # If no ASV as a substring, add it to list
+     if(!ss){
+          add <- c(add, s)
+     }
+}
+
+length(add)
+length(unique(add))
 ```
 
 ```{r}
@@ -374,9 +436,13 @@ add.tax.lca[lca > 1] = NA
 
 ```{r}
 # Combine rows
-taxtab <- rbind(taxtab,
-                add.tax.lca)
+taxtab <- 
+     rbind(taxtab,
+           add.tax.lca) %>% 
+     distinct() # Some of the taxa were already detected
 ```
+
+
 
 Now can update ASV table
 
