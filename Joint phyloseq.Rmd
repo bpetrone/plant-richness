@@ -236,6 +236,140 @@ unassigned <-
 sum(asvtab[, unassigned])/sum(asvtab)
 ```
 
+###### OPTIONAL: Update taxonomic assignment
+
+```{r}
+ref <- 
+     here('..',
+          'food-dbs',
+          'data',
+          'processed',
+          'dada2-compatible',
+          'trnL',
+          '20210825_trnL_prior_format.fasta')
+          # '20220206_trnLGH_primers included.fasta')
+
+taxtab.species <- MButils::assignSpecies_mod(taxa_names(ps),
+                                             ref,
+                                             tryRC = TRUE)
+```
+
+How many ASVs unassigned?
+```{r}
+unassigned <- taxtab.species$asv[is.na(taxtab.species$Species)]
+
+# Percentage of sequence variants
+length(unassigned)/dim(asvtab)[2]
+```
+
+```{r}
+# Percentage of reads mapping to these unassigned species
+sum(asvtab[, unassigned])/sum(asvtab)
+```
+
+Try implementing functions from taxa
+Now want to build out whole tree
+```{r}
+# Separate ID from species name for querying
+taxtab.species <- 
+     taxtab.species %>%
+     separate(col = Species,
+              into = c('index', 'label'), sep = '\\s',
+              extra = 'merge')
+
+taxmap <- taxa::lookup_tax_data(taxtab.species, 
+                                type = 'taxon_name', 
+                                column = 'label')
+
+taxonomy <- taxa::taxonomy_table(taxmap, 
+                                 use_ranks = c('superkingdom', 'kingdom', 
+                                               'phylum', 'order', 'family',
+                                               'genus', 'species', 'varietas'))
+```
+
+Join to results
+Need to do two separate joins: One for subspecies-level designations, and then the remainder at the species level.
+```{r}
+taxonomy.var <- filter(taxonomy, !is.na(varietas))
+taxtab.var <- 
+     taxtab.species %>% 
+     left_join(taxonomy.var, by = c('label' = 'varietas')) %>% 
+     filter(!is.na(species)) %>% 
+     select(asv, superkingdom, kingdom, phylum, order, family,
+            genus, species, varietas = label)
+
+# Missing columns will be filled with NA
+taxtab.species <- 
+     taxtab.species %>% 
+     filter(!(asv %in% taxtab.var$asv)) %>% 
+     left_join(taxonomy, by = c('label' = 'species')) %>%
+     select(asv, superkingdom, kingdom, phylum, order, family,
+            genus, species = label)
+
+taxtab.species <- bind_rows(taxtab.species, taxtab.var)
+```
+
+Find last common ancestor
+```{r}
+# Group by ASV
+lca <- 
+     taxtab.species %>%
+     group_by(asv) %>%
+     summarize_all(n_distinct) %>%
+     column_to_rownames(var = 'asv')
+
+# Now, relabel all those with >1 name at a particular level as NA
+# As a placeholder, keep only the first species, knowing it will be overwritten
+taxtab.species.lca <- 
+     taxtab.species %>%
+     group_by(asv) %>%
+     summarize_all(first) %>%
+     column_to_rownames(var = 'asv')
+```
+
+Now do relabeling 
+```{r}
+# Confirm ordering is okay
+all(rownames(lca) == rownames(taxtab.species.lca))
+
+taxtab.species.lca[lca > 1] = NA
+taxtab.species.lca <- 
+     rownames_to_column(taxtab.species.lca, var = 'asv')
+```
+
+```{r}
+colSums(!is.na(taxtab.species.lca))/nrow(taxtab.species.lca)
+```
+
+```{r}
+# blast <- 
+#      taxtab.species %>%
+#      filter(is.na(species)) %>%
+#      pull(asv)
+# 
+# names(blast) <- as.character(seq_along(blast))
+
+# blast <- Biostrings::DNAStringSet(blast)
+# Biostrings::writeXStringSet(blast,
+# here('data', 'processed', 'miniseq', '20201201',
+#      '20210608_no_tax_assignment.fasta'))
+```
+
+Replace in phyloseq object
+
+```{r}
+taxdf <- 
+     taxtab.species.lca %>%
+     column_to_rownames(var = 'asv') %>%
+     as.matrix()
+
+tax_table(ps) <- tax_table(taxdf)
+```
+
+#### Subset to foods only
+
+2021/02: -5 taxa from prior
+
 ```{r}
 # Consider foods only
 ps <- subset_taxa(ps, !is.na(superkingdom))
@@ -323,6 +457,22 @@ taxtab['ATCCTGTTTTATGAAAATAAACAAGGGTTTCATAAACCGAAAATAAAAAAG',
 taxtab['ATCCCGTTTTATGAAAACAAACAAGGGTTTCAGAAAGCGAGAATAAATAAAG', 
        'name'] <- 'Rosaceae (strawberry, brambles, rose)'
 
+```
+
+```{r}
+# Brassica
+taxtab %>% filter(name == 'Brassica') %>% row.names()
+
+taxtab['ATCCTGGGTTACGCGAACAAACCAGAGTTTAGAAAGCGG', 
+       'name'] <- 'Brassica (juncea, rapa)'
+taxtab['ATCTTGGGTTACGCGAACAAACCAGAGTTTAGAAAGCGG', 
+       'name'] <- 'Brassica (napus, oleracea)'
+
+# Carya-- substrings of each other
+taxtab %>% filter(name == 'Carya') %>% row.names()
+
+# Citrus-- substrings
+taxtab %>% filter(name == 'Citrus') %>% row.names()
 ```
 
 ```{r}
