@@ -45,7 +45,7 @@ db <-
           'processed',
           'dada2-compatible',
           'trnL',
-          '20210825_trnL_prior_format (taxonomy).fasta') %>% 
+          'trnLGH.fasta') %>% 
      readDNAStringSet()
 ```
 
@@ -60,19 +60,6 @@ taxtab <-
      select(-name)
 
 tax_table(ps) <- tax_table(as.matrix(taxtab))
-```
-
-### Filter
-
-```{r}
-# # Remove any taxon seen with 3 or fewer counts in a sample
-# # In current data, this is 60 entries
-# asvtab <- ps@otu_table@.Data
-# asvtab[asvtab <= 3] <- 0
-# 
-# # Replace in phyloseq object
-# otu_table(ps) <- otu_table(asvtab,
-#                            taxa_are_rows = FALSE)
 ```
 
 ## Reference
@@ -93,69 +80,23 @@ db.df
 ```{r}
 # Separate name and assign ranks
 db.df <- 
-     db.df %>% 
-     # Trim terminal semicolon, not needed here
-     mutate(name = gsub(name, pattern = ';$', replacement = '')) %>% 
+     db.df %>%
      separate(name, 
-              into = c( "superkingdom",
-                        "kingdom",
-                        "phylum",
-                        "order",
-                        "family",
-                        "genus",
-                        "species",
-                        "subspecies or varietas"),
-              sep = ';') # Based on current structure any sub-species-level designation will land here.
-```
+              into = c( "accession",
+                        "name" ),
+              sep = '\\s',
+              extra = 'merge') 
 
-Note that this has subspecies as a column, whereas phyloseq object does not.  Likely need to go back and correct this.  But for clearer merge, just drop subspecies column for now. 
-
-```{r}
-dim(db.df)
-db.df <- 
-     db.df %>% 
-     filter(!(grepl(`subspecies or varietas`,
-                    pattern = 'subsp\\.')))
-dim(db.df)
+# Add ASV info alongside
+db.df$seq <- as.character(db)
 ```
 
 ```{r}
-# Now can rename to varietas column
-names(db.df)[names(db.df) == 'subspecies or varietas'] <- 'varietas'
+# Look up accession taxonomy with taxa package functions
+taxmap <- taxa::lookup_tax_data(db.df$accession, 
+                                type = 'seq_id')
 ```
 
-Also need to manually correct cyanobacterial by shifting all entries right
-```{r}
-cyano <- 
-     db.df %>% 
-     filter(superkingdom != 'Eukaryota')
-
-# Remove these rows from the full reference
-db.df <- 
-     db.df %>% 
-     filter(superkingdom == 'Eukaryota')
-
-cyano
-```
-```{r}
-# Correct
-cyano <- 
-     cyano %>% 
-     select(-species) %>% # This column is empty
-     select(species = genus,
-            genus = family,
-            family = order,
-            order = phylum,
-            phylum = kingdom,
-            everything()) %>% 
-     mutate(kingdom = NA)
-
-cyano
-```
-
-```{r}
-db.df <- bind_rows(db.df, cyano)
-```
 
 # Statistics
 
