@@ -14,6 +14,7 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 library(here)
 library(iNEXT)
 library(phyloseq)
+library(scales) # For label = comma
 library(tidyverse)
 library(vegan)
 ```
@@ -145,8 +146,23 @@ samdf %>%
      count() %>% 
      ungroup() %>% 
      group_by(study) %>% 
-     summarize(mean = mean(n), sd = sd(n))
+     summarize(mean = mean(n), sd = sd(n),
+               med = median(n), mad = mad(n))
 ```
+Median and median absolute deviations are better measures when data is non-normal:
+
+```{r}
+samdf %>% 
+     group_by(study, subj) %>% 
+     count() %>% 
+     ungroup() %>% 
+     ggplot(aes(x = n)) +
+     geom_histogram(binwidth = 1,
+                    boundary = 0) +
+     facet_wrap(~study,
+                scales = 'free_y')
+```
+Ok, so think best to report median and median absolute deviation.
 
 ## Number of taxa
 
@@ -156,16 +172,39 @@ ntaxa(ps)
 ```
 
 ```{r}
-# Consumed in >1 individual
 asvtab <- 
      ps@otu_table@.Data %>% 
      data.frame()
-
-multiple <- 
-     apply(asvtab, 2, function(x){sum(x > 0) > (0.5*length(x))})
 ```
 
-## Reads mapping to food
+```{r}
+# Consumed in more than one individual
+more_than_one <- 
+     apply(asvtab, 2, function(x){sum(x > 0) > 1})
+
+sum(more_than_one)
+```
+
+```{r}
+# Consumed in >50% of individuals
+multiple <- 
+     apply(asvtab, 2, function(x){sum(x > 0) > (0.5*length(x))})
+
+sum(multiple)
+```
+
+```{r}
+# What are these taxa?
+taxtab <- 
+     ps@tax_table@.Data %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'asv')
+
+taxtab %>% 
+     filter(asv %in% names(which(multiple)))
+```
+
+### Reads mapped
 
 ```{r}
 # % reads mapping to food
@@ -173,15 +212,86 @@ sum(samdf$reads_food)/sum(samdf$reads_tot)
 ```
 
 ```{r}
+# % unmapped
+1 - sum(samdf$reads_food)/sum(samdf$reads_tot)
+```
+
+```{r}
 # Range across samples
-# Include only those with >1,000 reads
+# Include only those with >1,000 reads as otherwise this gets funky
+# (e.g. 2 reads but one not identified)
 samdf %>% 
      select(row, starts_with('reads')) %>% 
      filter(reads_tot >= 1000) %>% 
      mutate(pct_no_id = 1 - (reads_food/reads_tot)) %>% 
      arrange(desc(pct_no_id))
 ```
+
+```{r}
+samdf %>% 
+     select(row, starts_with('reads')) %>% 
+     filter(reads_tot >= 1000) %>% 
+     mutate(pct_no_id = 1 - (reads_food/reads_tot)) %>% 
+     pull(pct_no_id) %>% 
+     range()
+```
+
 Ooh-- definitely need to follow up on this.
+
+```{r}
+samdf %>% 
+     select(study, row, starts_with('reads')) %>% 
+     filter(reads_tot >= 1000) %>% 
+     mutate(pct_no_id = 1 - (reads_food/reads_tot)) %>% 
+     ggplot(aes(x = pct_no_id)) +
+     geom_histogram() +
+     facet_wrap(~study) +
+     labs(y = 'Frequency', x = 'Unidentified reads (%)')
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+# ggsave(here('results',
+#             'manuscript',
+#             'supplemental',
+#             'read depth',
+#             paste0(plotID, '_Unassigned reads by study (histogram).pdf')),
+#        height = 4, width = 5)
+```
+
+Maybe another vis, to make outliers clearer?
+
+```{r}
+samdf %>% 
+     select(study, row, starts_with('reads')) %>% 
+     # filter(reads_tot >= 1000) %>% 
+     mutate(pct_no_id = 1 - (reads_food/reads_tot)) %>% 
+     # Color those higher than dataset average 
+     ggplot(aes(x = reads_tot, y = reads_food)) +
+     geom_abline(slope = 1, 
+                 intercept = 0, 
+                 color = '#e15759',
+                 linetype = 'dashed') +
+     geom_point(alpha = 0.5) +
+     coord_equal()+
+     scale_x_continuous(label = comma) + scale_y_continuous(label = comma) +
+     # scale_x_log10(label = comma) + scale_y_log10(label = comma) +
+     facet_wrap(~study, nrow = 1) +
+     labs(y = 'Mapped reads', x = 'Total reads') +
+     theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+ggsave(here('results',
+            'manuscript',
+            'supplemental',
+            'read depth',
+            paste0(plotID, '_Unassigned reads by study (linear scale).pdf')),
+       device = cairo_pdf,
+       height = 3, width = 6)
+```
 
 ## Read count threshold
 
@@ -706,10 +816,6 @@ readcounts.permanova %>%
      filter(fit == 'p' & value > 0.05)
 ```
 
-### iNEXT
-
-
-
 ### Vegan
 
 #### Inspect curves
@@ -878,8 +984,8 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ```{r}
 # Save rarefied data
 # saveRDS(rarefaction.df,
-#         here('data', 
-#              'processed', 
+#         here('data',
+#              'processed',
 #              'rarefaction',
 #              'Rarefied trnL counts.rds'))
 ```
