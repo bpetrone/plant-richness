@@ -16,6 +16,19 @@ library(phyloseq)
 library(tidyverse)
 ```
 
+```{r}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
 # Load input data
 
 ## trnL metabarcoding
@@ -134,24 +147,21 @@ samdf <-
      rownames_to_column(var = 'row')
 ```
 
+### Add variables
 
-##### BMI
+##### Missing weight
 
-Uppercase in ONR, lower case in others
+One ONR participant had a height entry missing, but does have BMI. Use to infer weight and update:
 
 ```{r}
-samdf <- 
-     samdf %>% 
-     unite(col = bmi,
-           bmi, BMI,
-           na.rm = TRUE) %>% 
-     mutate(bmi = ifelse(bmi == '', # Replace now empty values with NA
-                         yes = NA,
-                         no = bmi))
+samdf %>% 
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     select(row, subj, age, gender, m, kg, bmi) %>% 
+     filter(if_any(everything(), is.na))
 ```
-
-
-### Add variables
+```{r}
+samdf$m[samdf$subj == 'NV93'] <- sqrt(67.57031/22) # Comes out to ~5'8"
+```
 
 ##### Cycle correction
 
@@ -263,8 +273,8 @@ ref <-
           'processed',
           'dada2-compatible',
           'trnL',
-          '20210825_trnL_prior_format.fasta')
-          # 'trnLGH.fasta')
+          # '20210825_trnL_prior_format.fasta')
+          'trnLGH.fasta')
 
 taxtab.species <- MButils::assignSpecies_mod(taxa_names(ps),
                                              ref,
@@ -286,6 +296,7 @@ sum(asvtab[, unassigned])/sum(asvtab)
 
 Try implementing functions from taxa
 Now want to build out whole tree
+If errors here, may need to try repeatedly. See similar errors [here](https://github.com/ropensci/taxa/issues/202): "It appears that downloading the classifications for such a long list of taxon IDs from NCBI is very fragile"
 ```{r}
 # Separate ID from species name for querying
 taxtab.species <- 
@@ -412,16 +423,6 @@ tax_table(ps.update) <- tax_table(taxdf)
 
 ###### OPTIONAL: Compare to prior
 
-Does this substantially change the number of observed taxa per sample?
-```{r}
-# All ASVs
-asvtab <- ps@otu_table@.Data
-asvtab.update <- ps.update@otu_table@.Data
-
-dim(asvtab)
-dim(asvtab.update)
-```
-
 ```{r}
 # Food ASVs
 asvtab <- 
@@ -449,7 +450,7 @@ obs.df <-
 
 obs.df <- 
      apply(asvtab.update, 1, function(x){sum(x > 0)}) %>% 
-     data.frame(aug21 = .) %>% 
+     data.frame(feb22 = .) %>% 
      rownames_to_column(var = 'row') %>% 
      full_join(obs.df)
      
@@ -457,11 +458,12 @@ obs.df
 ```
 
 ```{r}
-ggplot(obs.df, aes(x = summer21, y = aug21)) +
+ggplot(obs.df, aes(x = summer21, y = feb22)) +
+     geom_abline(slope = 1, intercept = 0, color = '#e15759') +
      geom_point(alpha = 0.5) +
      coord_equal() +
      labs(x = 'Summer 2021\n(mixed references)',
-          y = 'August 2021\n(full set of manual additions)')
+          y = 'February 2022\n(updated inputs, pipeline,\nplus manual additions)')
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
@@ -469,14 +471,65 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('..',
             'food-dbs',
             'results',
-            paste0(plotID, '_Database update (Summer21 to Aug21).pdf')),
+            paste0(plotID, '_Database update (Summer21 to Feb22).pdf')),
        height = 4, width = 4)
 ```
 
+Interesting to note here that a small number of taxa have *fewer* assignments.  This means I am potentially missing sequences that were included in earlier versions?
+
+```{r}
+# Compare ASV-level assignments
+taxtab <- 
+     ps@tax_table@.Data %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'asv') %>% 
+     mutate(ref = 'prior') 
+
+taxtab.update <- 
+     ps.update@tax_table@.Data %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'asv') %>% 
+     mutate(ref = 'current')
+
+different <- 
+     bind_rows(taxtab, 
+               taxtab.update) %>% 
+     group_by(asv) %>% 
+     summarize(across(.cols = c(superkingdom, 
+                                kingdom,
+                                phylum,
+                                order,
+                                family,
+                                genus,
+                                species,
+                                varietas,
+                                subspecies),
+                      ~n_distinct(.x))) %>% # Distinct labels
+     # Pull only those ASVs that differ
+     filter(if_any(.cols = superkingdom:subspecies,
+                   ~ .x != 1)) %>% 
+     pull(asv)
+```
+
+```{r}
+# Write to file and inspect
+bind_rows(taxtab, 
+          taxtab.update) %>% 
+     filter(asv %in% different) %>% 
+     arrange(asv, ref) %>% 
+     select(asv, ref, everything()) %>% 
+     write_csv(here('results',
+                    'Taxonomic assignment differences.csv'))
+```
+
+
+```{r}
+# Optional: move forward with updated reference
+ps <- ps.update
+rm(ps.update)
+```
 
 ###### Subset
-
-2021/02: -5 taxa from prior
 
 ```{r}
 # Consider foods only
@@ -538,21 +591,24 @@ taxtab['ATCACGTTTTCCGAAAACAAACAAAGGTTCAGAAAGCGAAAATAAAAAAG',
      'Asteraceae (sunflower, sunchoke, dandelion)'
 taxtab['AAATCACGTTTTCCGAAAACAAACAAAGGTTCAGAAAGCGAAAAGAAAAAAAG', 
        'name'] <- 
-     'Asteraceae (sunflower, sunchoke, dandelion)'
+     'Asteraceae (chamomile)'
 
 # Cucurbitaceae 
 # These are subsequences; label by shortest one
+# Note in new database these are all labeled as Chinese okra. Follow up 
 
-taxtab['ATCCTTTTTCCGAAAACAAAAAAAAGG', 
-       'name'] <- 'Cucurbitaceae (pumpkin, squash, gourd, Chinese okra)'
+# taxtab['ATCCTTTTTCCGAAAACAAAAAAAAGG', 
+#        'name'] <- 'Cucurbitaceae (pumpkin, squash, gourd, Chinese okra)'
+# 
+# taxtab['ATCCTTTTTCCGAAAACAAAAAAAAG', 
+#        'name'] <- 'Cucurbitaceae (pumpkin, squash, gourd, Chinese okra)'
+# 
+# taxtab['ATCCTTTTTCCGAAAACAAAAAAAAGGG', 
+#        'name'] <- 'Cucurbitaceae (pumpkin, squash, gourd, Chinese okra)'
 
-taxtab['ATCCTTTTTCCGAAAACAAAAAAAAG', 
-       'name'] <- 'Cucurbitaceae (pumpkin, squash, gourd, Chinese okra)'
+# Carya: Subsequences, don't need manual correction
 
-taxtab['ATCCTTTTTCCGAAAACAAAAAAAAGGG', 
-       'name'] <- 'Cucurbitaceae (pumpkin, squash, gourd, Chinese okra)'
-
-# Fabaceae (NEW REF ONLY)
+# Fabaceae 
 # Subsequences
 taxtab['ATCCTGTTTTCCGAAAACAAAGAAAAGTTCATAAAGTGATAATAAAAAAGG',
        'name'] <-
@@ -562,12 +618,13 @@ taxtab['AAATCCTGTTTTCCGAAAACAAAGAAAAGTTCATAAAGTGATAATAAAAAAGG',
        'name'] <-
      'Fabaceae (soybean, guar)'
 
-# Distinct
+# Distinct 
 taxtab['ATCCTGTTTTCTGAAAACAAAGAAAAATTCAGAAAGTTATAATAAAAAAGG', 
        'name'] <- 
      'Fabaceae (hyacinth bean, adzuki bean, moth bean, rice bean, black gram bean)'
 
-# Lamiaceae (NEW REF ONLY)
+# Lamiaceae
+# Distinct SVs
 taxtab['ATCCTGTTTTCTCAAAACAAAGGTTCAAAAAACGAAAAAAAAAG', 'name'] <- 
      'Lamiaceae (lemon balm, rosemary)'
 
@@ -577,68 +634,45 @@ taxtab['ATCCTGTTTTCTCAAAACAAAAGTTCAAAAAACGAAAAAAAAAAAAAG', 'name'] <-
 taxtab['ATCCTGTTTTCTCAAAACAAAGGTTCAAAAAACGAAAAAAAAAAG', 'name'] <- 
      'Lamiaceae (korean mint, african basil, rosemary)'
 
-# # Lauraceae (OLD REF ONLY)
-# # Also subsequences
-# taxtab['ATCCTGTTTTCAGAAAACAAGGGTTCAGAAAGCGAGAACCAAAAAAAGGATAG', 
-#        'name'] <- 'Lauraceae (cinnamon, bay leaf, avocado)'
-# 
-# taxtab['ATCCTGTTTTCAGAAAACAAGGGTTCAGAAAGCGAGAACCAAAAAAAG', 
-#        'name'] <- 'Lauraceae (cinnamon, bay leaf, avocado)'
+# Phaseolus
+# Distinct SVs, but map to the same taxa
+taxtab['ATCCCGTTTTCTGAAAAAAAGAAAAATTCAGAAAGTGATAATAAAAAAGG', 'name'] <- 
+     'Phaseolus (common bean, lima bean)'
 
-# # Poaceae
-# # Also subsequences, but should be labeled
-# 
-# taxtab['ATCCGTGTTTTGAGAAAACAAGGGGTTCTCGAACTAGAATACAAAGGAAAAG', 
-#        'name'] <- 'Poaceae (rye, wheat)'
-# 
-# taxtab['AATCCGTGTTTTGAGAAAACAAGGGGTTCTCGAACTAGAATACAAAGGAAAAG', 
-#        'name'] <- 'Poaceae (rye, wheat)'
+taxtab['ATCCTGTTTTCTGAAAAAAAGAAAAATTCAGAAAGTGAGAATAAAAAAGG', 'name'] <- 
+     'Phaseolus (common bean, lima bean)'
+
+# Poaceae
+# Two pairs of subsequences:
+
+# 1
+taxtab['ATCCGTGTTTTGAGAAAACAAGGGGTTCTCGAACTAGAATACAAAGGAAAAG', 'name'] <- 
+     'Poaceae (rye, wheat)'
+
+taxtab['AATCCGTGTTTTGAGAAAACAAGGGGTTCTCGAACTAGAATACAAAGGAAAAG', 'name'] <- 
+     'Poaceae (rye, wheat)'
+
+# 2
+taxtab['ATCCATGTTTTGAGAAAACAAGCGGTTCTCGAACTAGAACCCAAAGGAAAAG', 'name'] <- 
+     'Poaceae (rye, rice)'
+
+taxtab['AATCCATGTTTTGAGAAAACAAGCGGTTCTCGAACTAGAACCCAAAGGAAAAG', 'name'] <- 
+     'Poaceae (rye, rice)'
 
 # Rosaceae
-# Not listed, but needs to be manually labeled because of pear cultivar
-# that can't be looked up: propagates NAs
-taxtab['ATCCTGTTTTATGAAAATAAACAAGGGTTTCATAAACCGAAAATAAAAAAG', 
-       'name'] <- 'Rosaceae (apples, pears)'
+# 1
+taxtab['ATCCCGTTTTATGAAAACAAACAAGGGTTTCAGAAAGCGAGAATAAATAAAG', 'name'] <- 
+     'Rosaceae (arctic raspberry, wild, virginia, and beach strawberries)'
 
-taxtab['ATCCCGTTTTATGAAAACAAACAAGGGTTTCAGAAAGCGAGAATAAATAAAG', 
-       'name'] <- 'Rosaceae (strawberry, brambles, rose)'
+taxtab['AATCCCGTTTTATGAAAACAAACAAGGGTTTCAGAAAGCGAGAATAAATAAAG', 'name'] <- 
+     'Rosaceae (arctic raspberry, wild, virginia, and beach strawberries)'
 
-# Replace higher levels in taxonomy (need to fix this upstream)
-rosaceae <- c('ATCCTGTTTTATGAAAATAAACAAGGGTTTCATAAACCGAAAATAAAAAAG',
-                'ATCCCGTTTTATGAAAACAAACAAGGGTTTCAGAAAGCGAGAATAAATAAAG')
+# 2
+taxtab['ATCCTGTTTTATGAAAATAAACAAGGGTTTCATAAACCGAAAATAAAAAAG', 'name'] <- 
+     'Rosaceae (apple, pear)'
 
-taxtab <- 
-     taxtab %>% 
-     rownames_to_column(var = 'asv') %>% 
-     mutate(superkingdom = ifelse(asv %in% rosaceae),
-                            yes = 'Eukaryota', no = superkingdom,
-            kingdom = ifelse(asv %in% rosaceae),
-                            yes = 'Viridiplantae', no = kingdom,
-            superkingdom = ifelse(asv %in% rosaceae),
-                            yes = 'Eukaryota', no = superkingdom,
-            superkingdom = ifelse(asv %in% rosaceae),
-                            yes = 'Eukaryota', no = superkingdom,
-            superkingdom = ifelse(asv %in% rosaceae),
-                            yes = 'Eukaryota', no = superkingdom,
-                         
-                 family = ifelse(asv %in% rosaceae,
-                            yes = '))
-```
-
-```{r}
-# Brassica
-taxtab %>% filter(name == 'Brassica') %>% row.names()
-
-taxtab['ATCCTGGGTTACGCGAACAAACCAGAGTTTAGAAAGCGG', 
-       'name'] <- 'Brassica (juncea, rapa)'
-taxtab['ATCTTGGGTTACGCGAACAAACCAGAGTTTAGAAAGCGG', 
-       'name'] <- 'Brassica (napus, oleracea)'
-
-# Carya-- substrings of each other
-taxtab %>% filter(name == 'Carya') %>% row.names()
-
-# Citrus-- substrings
-taxtab %>% filter(name == 'Citrus') %>% row.names()
+taxtab['AAATCCTGTTTTATGAAAATAAACAAGGGTTTCATAAACCGAAAATAAAAAAG', 'name'] <- 
+     'Rosaceae (apple, pear)'
 ```
 
 ```{r}
