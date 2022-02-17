@@ -15,6 +15,19 @@ library(phyloseq)
 library(tidyverse)
 ```
 
+```{r}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
 # Read in data
 
 ## trnL
@@ -23,7 +36,10 @@ Note this is already trimmed to only those taxa identified to a food species, wi
 ```{r}
 # Read in last saved phyloseq
 ps <- 
-     here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds') %>% 
+     here('data', 
+          'processed',
+          'phyloseq', 
+          'trnL_combined_ps.rds') %>% 
      readRDS()
 
 ps
@@ -36,11 +52,12 @@ rare.df <-
      here('data', 
           'processed', 
           'rarefaction',
-          'Rarefied trnL counts (10,500 reads).rds') %>% 
+          'Rarefied trnL counts.rds') %>% 
      readRDS
 
 rare.df
 ```
+
 ## Cumulative richness estimates
 
 ```{r}
@@ -54,37 +71,15 @@ cumulative.df <-
 
 ## Diet surveys
 
-### DHQ3-based PDI
+Calculated in Adult-1, Adult-2 dietary indices notebook.
 
 ```{r}
-# Adult-1
-pdi.adult1 <-
-     here('data', 
-          'processed', 
-          'Adult-1', 
-          'PDI scores by subject.csv') %>% 
+pdi <- 
+     here('data',
+          'processed',
+          'DHQ3',
+          'Adult-1 and Adult-2 dietary indices.csv') %>% 
      read_csv()
-
-head(pdi.adult1)
-```
-
-```{r}
-# Adult-2
-pdi.adult2 <-
-     here('data', 
-          'processed', 
-          'Adult-2', 
-          'PDI scores by subject.csv') %>% 
-     read_csv()
-
-head(pdi.adult2)
-```
-
-```{r}
-# Join together
-pdi <- bind_rows(pdi.adult1, pdi.adult2)
-
-rm(pdi.adult1, pdi.adult2)
 ```
 
 # Pre-process
@@ -103,50 +98,50 @@ ps <-
 ps
 ```
 
-### Full alpha diversity measures
-
 ```{r}
 alpha <- 
      rare.df %>% 
-     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
-     select(name, study, subj, CH_week, ONR_day, starts_with('obs'))
+     filter(grepl(name, pattern = 'CHOMP|ONR') )
 ```
 
 ```{r}
-# Add in full set of observations and Shannon diversity, including samples with fewer than read count threshold
-add <- 
-     estimate_richness(ps, 
-                       measures = c('Observed',
-                                    'Shannon')) %>% 
-     rownames_to_column(var = 'name') %>% 
-     mutate(name = gsub('\\.', '-', name)) %>%  # Correct '.' to '-' substitution
-     rename(obs = Observed)
+# Add in sample metadata
 
 # Populate with sample data
 add <- 
      ps@sam_data %>%
      data.frame() %>% 
      rownames_to_column(var = 'row') %>% 
-     select(row, study, subj, CH_week, ONR_day) %>% 
-     right_join(add, by = c('row' = 'name')) %>% 
-     rename(name = row)
+     select(row, study, subj, CH_week, ONR_day) 
 
 alpha <- 
-     full_join(alpha,
-               add)
+    left_join(alpha, add,
+              by = c('name' = 'row'))
 ```
 
-### Mean per participant
+Then below, can just filter by desired threshold in order to calculate measures.
+
+### Mean richness
 
 ```{r}
 # Average trnL richness within each subject
 alpha.mean <-
      alpha %>% 
-     group_by(study, subj) %>% 
+     group_by(study, subj, threshold) %>% 
      summarize(mean = mean(obs),
-               mean_shannon = mean(Shannon),
                mean_rare = mean(obs_rare, na.rm = TRUE)) %>% 
      ungroup()
+```
+
+## Diet surveys
+
+Subset to PDI values only
+
+```{r}
+pdi <- 
+     select(pdi,
+            study, subj, kcal,
+            matches('PDI'))
 ```
 
 # Analyze
@@ -161,17 +156,9 @@ pdi <-
 ```
 
 ```{r}
-# Make labels plot-friendly
-names(pdi)[names(pdi) == 'pdi'] <- 'PDI'
-names(pdi)[names(pdi) == 'hpdi'] <- 'hPDI'
-names(pdi)[names(pdi) == 'updi'] <- 'uPDI'
-```
-
-```{r}
 # Select relevant columns, get in long form
 pdi.long <- 
      pdi %>% 
-     select(study:uPDI) %>% 
      pivot_longer(cols = matches('pdi'),
                   names_to = 'index', 
                   values_to = 'value')
@@ -180,100 +167,225 @@ pdi.long$index <- factor(pdi.long$index,
                          levels = c('PDI', 'hPDI', 'uPDI'))
 ```
 
-### Adult-1
+```{r}
+# PDI visualization (need to rework given new data structure)
+pdi.long %>% 
+     select(-c(threshold, mean_rare)) %>% 
+     distinct() %>% 
+     ggplot(aes(x = index, y = value)) + 
+     geom_boxplot() +
+     ylim(18, 90) +
+     facet_wrap(~study) +
+     labs(y = 'Score value', x = 'Score type') +
+     theme_bw()
+```
+
+```{r}
+pdi.long %>% 
+     select(-c(threshold, mean_rare)) %>% 
+     filter(index == 'hPDI') %>% 
+     distinct() %>% 
+     ggplot(aes(x = value, y = mean)) +
+     geom_point(size = 2, alpha = 0.8) +
+     facet_wrap(~study,
+                nrow = 2) +
+     labs(y = 'Mean pMR',
+          x = 'hPDI\n') 
+     
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            '3',
+            paste0(plotID, '_raw trnL richness x hPDI.pdf')),
+       device = cairo_pdf,
+       height = 4, width = 2.5)
+```
+
+```{r}
+# Raw
+pdi.long %>% 
+     select(-c(threshold, mean_rare)) %>% 
+     distinct() %>% 
+     group_by(study, index) %>% 
+     summarize(rho = cor.test(~ value + mean,
+                           method = 'spearman')$estimate,
+               p = cor.test(~ value + mean,
+                            method = 'spearman')$p.value) %>% 
+     mutate(p_adj = p.adjust(p, method = 'BH'))
+```
+
+
+```{r}
+# Rarefied
+pdi.long %>% 
+     filter(threshold == 1000) %>% 
+     group_by(study, index) %>% 
+     summarize(rho = cor.test(~ value + mean,
+                           method = 'spearman')$estimate,
+               p = cor.test(~ value + mean,
+                            method = 'spearman')$p.value) %>% 
+     mutate(p_adj = p.adjust(p, method = 'BH'))
+            
+```
 
 ```{r}
 pdi.long %>% 
      filter(study == 'Adult-1') %>% 
-     ggplot(aes(x = mean, y = value)) +
-     geom_point() +
-     facet_wrap(~index) +
-     labs(x = 'Mean *trnL* richness',
-          y = 'Dietary index score') +
-     theme_bw() +
-     theme(axis.title.x = ggtext::element_markdown(),
-           axis.title = element_text(size = 14))
+     group_by(index) %>% 
+     summarize(rho = cor.test(~ value + obs_rare,
+                           method = 'spearman')$estimate,
+               p = cor.test(~ value + obs_rare,
+                            method = 'spearman')$p.value) %>% 
+     mutate(p_adj = p.adjust(p, method = 'BH'))
 ```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results',
-#             'manuscript',
-#             '2',
-#             paste0(plotID, '_C trnL richness x PDI indices (Adult-1).pdf')),
-#        height = 3, width = 7)
-```
-
-```{r}
-pdi %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean + PDI,
-              data = ., 
-              method = 'spearman')
-```
-
-```{r}
-pdi %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean + hPDI,
-              data = ., 
-              method = 'spearman')
-```
-
-```{r}
-pdi %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean + uPDI,
-              data = ., 
-              method = 'spearman')
-```
-
-
-### Adult-2
-
 ```{r}
 pdi.long %>% 
      filter(study == 'Adult-2') %>% 
-     ggplot(aes(x = mean, y = value)) +
+     group_by(index) %>% 
+     summarize(rho = cor.test(~ value + obs_rare,
+                           method = 'spearman')$estimate,
+               p = cor.test(~ value + obs_rare,
+                            method = 'spearman')$p.value) %>% 
+     mutate(p_adj = p.adjust(p, method = 'BH'))
+```
+
+#### Linear fit
+
+```{r}
+fit.1 <- 
+     pdi %>% 
+     filter(study == 'Adult-1') %>% 
+     lm(hPDI ~ mean, data = .)
+
+summary(fit.1)
+```
+
+```{r}
+# Mean, SD of raw data and fitted values
+pdi %>% 
+     filter(study == 'Adult-1', !is.na(hPDI)) %>% 
+     pull(hPDI) %>% 
+     data.frame(y = .,
+                yhat = fitted(fit.1)) %>% 
+     summarize(across(.fns = list(mean = mean, sd = sd)))
+```
+
+```{r}
+pdi %>% 
+     filter(study == 'Adult-1') %>% 
+     ggplot(aes(x = mean, y = hPDI)) +
      geom_point() +
-     facet_wrap(~index) +
+     # geom_abline(slope = fit.1$coefficients[[2]],
+     #             intercept = fit.1$coefficients[[1]],
+     #             color = 'blue',
+     #             linetype = 'dashed') +
+     annotate('text', x = 20, y = 30, 
+              # label = 'atop(R^2 == 0.34, p == 0.002)',
+              label = 'atop(rho == 0.52, p == 0.008)',
+              parse = TRUE,
+              size = 5,
+              color = 'blue') +
+     xlim(5, 25) + ylim(20, 76) +
      labs(x = 'Mean *trnL* richness',
-          y = 'Dietary index score') +
+          y = 'hPDI') +
      theme_bw() +
      theme(axis.title.x = ggtext::element_markdown(),
-           axis.title = element_text(size = 14))
+           axis.title = element_text(size = 14, 
+                                     face = 'bold'),
+           axis.text = element_text(size = 12, 
+                                    face = 'bold'))
 ```
+
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results',
-#             'manuscript',
-#             '2',
-#             paste0(plotID, '_C trnL richness x PDI indices (Adult-2).pdf')),
-#        height = 3, width = 7)
+ggsave(here('..',
+            'development',
+            'docs',
+            'r01',
+            '2021_11',
+            paste0(plotID, '_Adult-1 hPDI x trnL.pdf')),
+       height = 3, width = 3)
 ```
 
 
 ```{r}
-pdi %>% 
+fit.2 <- 
+     pdi %>% 
      filter(study == 'Adult-2') %>% 
-     cor.test(~ mean + PDI,
-              data = ., 
-              method = 'spearman')
+     lm(hPDI ~ mean, data = .)
+
+summary(fit.2)
 ```
 
 ```{r}
+# Mean, SD of raw data and fitted values
 pdi %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean + hPDI,
-              data = ., 
-              method = 'spearman')
+     filter(study == 'Adult-2', !is.na(hPDI)) %>% 
+     pull(hPDI) %>% 
+     data.frame(y = .,
+                yhat = fitted(fit.2)) %>% 
+     summarize(across(.fns = list(mean = mean, sd = sd)))
+```
+
+## vs. ASA24
+
+```{r}
+# Concatenate richness measures
+recall.rows <- 
+     select(recall, subj = ID, starts_with('richness')) %>% 
+     pivot_longer(cols = starts_with('richness'),
+                  names_to = 'category',
+                  values_to = 'value') %>% 
+     mutate(category = gsub('richness_', '', category))
+
+trnL.rows <- 
+     rare.df %>% 
+     filter(study == 'Adult-1') %>% 
+     select(subj, value = obs_rare) %>% 
+     mutate(category = 'plant')
+
+recall.rows$measure = '24-hour recall'
+trnL.rows$measure = 'Metabarcoding'
+
+trnL.v.asa <- 
+     bind_rows(recall.rows, trnL.rows)
 ```
 
 ```{r}
-pdi %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean + uPDI,
-              data = ., 
-              method = 'spearman')
+trnL.v.asa %>% 
+     filter(category == 'plant') %>% 
+     ggplot(aes(x = subj, y = value, color = measure)) +
+     # geom_point()
+     geom_boxplot() +
+     theme_bw() +
+     theme(axis.text.x = element_text(angle = 20, hjust = 1))
+```
+
+```{r}
+# Try averaging within each participant to get one value
+trnL.v.asa.avg <- 
+     trnL.v.asa %>% 
+     filter(category == 'plant') %>% 
+     group_by(measure, subj) %>% 
+     summarize(mean = mean(value)) %>% 
+     pivot_wider(names_from = 'measure',
+                 values_from = 'mean')
+```
+
+```{r}
+ggplot(trnL.v.asa.avg, aes(x = `24-hour recall`, y = Metabarcoding)) +
+     geom_point() +
+     xlim(0, 20) + ylim(0, 20) +
+     coord_equal()
+```
+Consider: haven't filtered data for completeness?
+
+```{r}
+cor.test(trnL.v.asa.avg$`24-hour recall`, 
+         trnL.v.asa.avg$Metabarcoding,
+         method = 'spearman')
 ```
 
 ## Backwards selection
@@ -317,7 +429,7 @@ backwards_selection <-
           richness <- mean_richness(phyloseq, taxa = NULL)
           
           # Subset PDI to relevant columns: subject and hPDI
-          pdi <- select(pdi, subj, hpdi)
+          pdi <- select(pdi, subj, hPDI)
           
           # Join together
           richness <- left_join(richness, pdi,
@@ -327,7 +439,7 @@ backwards_selection <-
           # Get warning: "Cannot compute exact p-value with ties"
           spearman <- 
                cor.test(richness$mean_obs, 
-                        richness$hpdi,
+                        richness$hPDI,
                         method = 'spearman') %>% 
                suppressWarnings()
           
@@ -363,7 +475,7 @@ backwards_selection <-
                     # Calculate correlation
                     spearman <- 
                          cor.test(richness$mean_obs, 
-                                  richness$hpdi,
+                                  richness$hPDI,
                                   method = 'spearman') %>% 
                          suppressWarnings()
                     
@@ -413,5 +525,625 @@ backwards_selection <-
           # Return the list of dropped features
           dropped_features
      }
+```
+
+### Adult-1
+
+```{r}
+ps.adult1 <- 
+     ps %>% 
+     subset_samples(study == 'Adult-1') %>% 
+     prune_taxa(taxa_sums(.) > 0, .)
+```
+
+#### With cross-validation
+
+```{r}
+samdf <- 
+     data.frame(ps.adult1@sam_data) %>% 
+     rownames_to_column(var = 'row')
+```
+
+
+```{r}
+# Using group k-fold cross-validation data splitting function from caret
+# "For Group k-fold cross-validation, the data are split such that no group is contained in both the modeling and holdout sets. One or more group could be left out, depending on the value of k."
+set.seed(1019)
+folds <- 
+     groupKFold(samdf$subj, k = 3)
+
+# Make list for storing results
+results.1 <- list()
+
+# For each fold:
+for (f in folds){
+     # Get sample names of training data
+     samples.train <- samdf$row[f]
+     
+     # Subset the phyloseq object to the training set only
+     ps.train <- 
+          ps.adult1 %>% 
+          prune_samples(samples.train, .) %>% 
+          prune_taxa(taxa_sums(.) > 0, .)
+     
+     # Perform backward selection process, storing results
+     result <- backwards_selection(pdi, 
+                                   ps.train)
+     
+     results.1[[length(results.1) + 1]] <- result
+}
+```
+
+```{r}
+# saveRDS(results.1, 
+#         here('data', 
+#              'processed', 
+#              'Adult-1', 
+#              'k-fold CV',
+#              'k = 3 results.rds'))
+```
+
+So now, the strategy is to
+     - test each result on its corresponding test fold
+          - how many improve/worsen?
+          - if worsen, does "backing off" 5 iterations help?
+     - of results that hold in test set, what are the core ASVs preserved in/removed from the dataset?
+
+```{r}
+summary.df <- 
+     data.frame(
+          fold = NULL, # Fold number
+          set = NULL, # Training or test
+          optimized = NULL, # 1: Features dropped; 0: Full dataset
+          rho = NULL, # Spearman rho
+          p = NULL # Spearman p    
+)
+
+for (f in seq_along(folds)){
+     # Get training and test sets for this fold
+     samples.train <- samdf$row[folds[[f]]]
+     samples.test <- samdf$row[!(samdf$row %in% samples.train)]
+     ps.train <- prune_samples(samples.train, ps.adult1)
+     ps.test <- prune_samples(samples.test, ps.adult1)
+     
+     # Calculate hPDI correlation on training set
+     richness <- 
+          ps.train %>% 
+          mean_richness() %>% 
+          left_join(pdi, by = 'subj')
+                    
+     spearman <- 
+          cor.test(richness$mean_obs, 
+                   richness$hPDI,
+                   method = 'spearman') %>% 
+          suppressWarnings() # Can't compute exact p-value with ties
+
+     row <- c(f,
+              'train',
+              0,
+              spearman$estimate, 
+              spearman$p.value)
+     
+     names(row) <- c('fold',
+                     'set',
+                     'optimized',
+                     'rho',
+                     'p')
+     
+     summary.df <- bind_rows(summary.df, row)
+     
+     # Calculate hPDI correlation on test set
+     richness <- 
+          ps.test %>% 
+          mean_richness() %>% 
+          left_join(pdi, by = 'subj')
+                    
+     spearman <- 
+          cor.test(richness$mean_obs, 
+                   richness$hPDI,
+                   method = 'spearman') %>% 
+          suppressWarnings() # Can't compute exact p-value with ties
+
+     row <- c(f,
+              'test',
+              0,
+              spearman$estimate, 
+              spearman$p.value)
+     
+     names(row) <- c('fold',
+                     'set',
+                     'optimized',
+                     'rho',
+                     'p')
+     
+     summary.df <- bind_rows(summary.df, row)
+     
+     # Re-calculate the above with selected features only
+     dropped <- results[[f]]
+     
+     # Training
+     richness <- 
+          ps.train %>% 
+          # mean_richness(taxa = dropped) %>% # Exclude the dropped features
+          mean_richness(taxa = dropped[1:(length(dropped)-10)]) %>% # iterations back
+          left_join(pdi, by = 'subj')
+                    
+     spearman <- 
+          cor.test(richness$mean_obs, 
+                   richness$hPDI,
+                   method = 'spearman') %>% 
+          suppressWarnings() # Can't compute exact p-value with ties
+
+     row <- c(f,
+              'train',
+              1, # Only selected features
+              spearman$estimate, 
+              spearman$p.value)
+     
+     names(row) <- c('fold',
+                     'set',
+                     'optimized',
+                     'rho',
+                     'p')
+     
+     summary.df <- bind_rows(summary.df, row)
+     
+     # Calculate hPDI correlation on test set
+     richness <- 
+          ps.test %>% 
+          # mean_richness(taxa = dropped) %>% # Only selected features 
+          mean_richness(taxa = dropped[1:(length(dropped)-10)]) %>% # # iterations back
+          left_join(pdi, by = 'subj')
+                    
+     spearman <- 
+          cor.test(richness$mean_obs, 
+                   richness$hPDI,
+                   method = 'spearman') %>% 
+          suppressWarnings() # Can't compute exact p-value with ties
+
+     row <- c(f,
+              'test',
+              1, # Only selected features
+              spearman$estimate, 
+              spearman$p.value)
+     
+     names(row) <- c('fold',
+                     'set',
+                     'optimized',
+                     'rho',
+                     'p')
+     
+     summary.df <- bind_rows(summary.df, row)
+}
+```
+
+```{r}
+summary.df$rho <- as.numeric(summary.df$rho)
+summary.df$p <- as.numeric(summary.df$p)
+summary.df$set <- factor(summary.df$set,
+                         levels = c('train', 'test'))
+```
+
+```{r}
+summary.df %>% 
+     pivot_longer(cols = c(rho, p),
+                  names_to = 'measure',
+                  values_to = 'value') %>% 
+     ggplot(aes(x = set, y = value, color = fold)) +
+     geom_point(alpha = 0.7, size = 3) +
+     facet_grid(measure ~ optimized) +
+     theme_bw()
+```
+
+Ok, so this appears to be *improving* the result in both the training set and the testing set, which is promising.
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results',
+#             'cross-validation',
+#             paste0(plotID, '_Adult-1 3-fold cross-validation summary (-10 steps).pdf')),
+#        height = 3, width = 5)
+```
+
+A few ideas that come to mind here:
+- Step back 5 steps in each model, test again
+     + Tried this: Improvements with 5, decrease with 10
+- Flip flop these three onto Adult-2 and test performance
+     + With dropped features: Decline in results, think still overfitting
+     - With kept features (think these are conceptually different questions)
+- Look for "conserved" features kept in the set
+- Try forward selection instead?
+
+#### Test on 2
+
+```{r}
+ps.adult2 <- 
+     ps %>% 
+     subset_samples(study == 'Adult-2') %>% 
+     prune_taxa(taxa_sums(.) > 0 , .)
+```
+
+##### Dropped 
+```{r}
+# Dataframe for storing results
+summary.df <- 
+     data.frame(
+          fold = NULL, # Fold number
+          optimized = NULL, # With (1) or without (0) feature selection
+          rho = NULL, # Spearman rho
+          p = NULL # Spearman p    
+)
+
+for (f in seq_along(results)){
+     # Calculate hPDI correlation on Adult-2 cohort
+     richness <- 
+          ps.adult2 %>% 
+          mean_richness() %>% 
+          left_join(pdi, by = 'subj')
+                    
+     spearman <- 
+          cor.test(richness$mean_obs, 
+                   richness$hPDI,
+                   method = 'spearman') %>% 
+          suppressWarnings() # Can't compute exact p-value with ties
+
+     row <- c(f,
+              0, 
+              spearman$estimate, 
+              spearman$p.value)
+     
+     names(row) <- c('fold',
+                     'optimized',
+                     'rho',
+                     'p')
+     
+     summary.df <- bind_rows(summary.df, row)
+     
+     # Re-calculate the above with selected features only
+     dropped <- results[[f]] # Dropped taxa for this fold
+
+     # Training
+     richness <- 
+          ps.adult2 %>% 
+          # mean_richness(taxa = dropped) %>% # Exclude the dropped features
+          mean_richness(taxa = dropped[1:(length(dropped)-10)]) %>% # iterations back
+          left_join(pdi, by = 'subj')
+                    
+     spearman <- 
+          cor.test(richness$mean_obs, 
+                   richness$hPDI,
+                   method = 'spearman') %>% 
+          suppressWarnings() # Can't compute exact p-value with ties
+
+     row <- c(f,
+              1, # Only selected features
+              spearman$estimate, 
+              spearman$p.value)
+     
+     names(row) <- c('fold',
+                     'optimized',
+                     'rho',
+                     'p')
+     
+     summary.df <- bind_rows(summary.df, row)
+}
+```
+
+```{r}
+summary.df$rho <- as.numeric(summary.df$rho)
+summary.df$p <- as.numeric(summary.df$p)
+summary.df$fold <- factor(summary.df$fold)
+summary.df$optimized <- factor(summary.df$optimized)
+```
+
+```{r}
+summary.df %>% 
+     pivot_longer(cols = c(rho, p),
+                  names_to = 'measure',
+                  values_to = 'value') %>% 
+     ggplot(aes(x = optimized, y = value, color = fold)) +
+     geom_point(alpha = 0.7, size = 3) +
+     facet_wrap(~ measure) +
+     theme_bw()
+```
+
+Ok, so this is still overfitting-- declines in performance when tested on other dataset.  And compared to when I did this using the *full* dataset, it's seems worse on average (rho there was 0.36), and only one of the folds here exceeds that.
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'cross-validation',
+            paste0(plotID, '_Adult-1 dropped on Adult-2 (-10 steps).pdf')),
+       height = 3, width = 5)
+```
+
+What about, instead, intersection between dropped features??
+Overfitting indicates that we are tossing more than we should.  So a more stringent requirement would be to only discard a feature if it were discarded in all the folds tested.
+
+Find the core set of dropped taxa across the 3 folds.
+```{r}
+dropped <- Reduce(intersect, results)
+
+dropped
+```
+
+Now, try repeating correlations:
+
+```{r}
+# Dataframe for storing results
+summary.df <- 
+     data.frame(
+          optimized = NULL, # With (1) or without (0) feature selection
+          rho = NULL, # Spearman rho
+          p = NULL # Spearman p    
+)
+
+# Calculate hPDI correlation on Adult-2 cohort
+richness <- 
+     ps.adult2 %>% 
+     mean_richness() %>% 
+     left_join(pdi, by = 'subj')
+
+spearman <- 
+     cor.test(richness$mean_obs, 
+              richness$hPDI,
+              method = 'spearman') %>% 
+     suppressWarnings() # Can't compute exact p-value with ties
+
+row <- c(0, 
+         spearman$estimate, 
+         spearman$p.value)
+
+names(row) <- c('optimized',
+                'rho',
+                'p')
+
+summary.df <- bind_rows(summary.df, row)
+
+# Re-calculate the above with selected features only
+
+richness <- 
+     ps.adult2 %>%
+     mean_richness(taxa = dropped) %>% # Remove the intersection of all the dropped taxa 
+     left_join(pdi, by = 'subj')
+
+spearman <- 
+     cor.test(richness$mean_obs, 
+              richness$hPDI,
+              method = 'spearman') %>% 
+     suppressWarnings() # Can't compute exact p-value with ties
+
+row <- c(1, # Only selected features
+         spearman$estimate, 
+         spearman$p.value)
+
+names(row) <- c('optimized',
+                'rho',
+                'p')
+
+summary.df <- bind_rows(summary.df, row)
+```
+
+```{r}
+summary.df$rho <- as.numeric(summary.df$rho)
+summary.df$p <- as.numeric(summary.df$p)
+summary.df$optimized <- factor(summary.df$optimized)
+```
+
+```{r}
+summary.df %>% 
+     pivot_longer(cols = c(rho, p),
+                  names_to = 'measure',
+                  values_to = 'value') %>% 
+     ggplot(aes(x = optimized, y = value, color = fold)) +
+     geom_point(alpha = 0.7, size = 3) +
+     facet_wrap(~ measure) +
+     theme_bw()
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'cross-validation',
+            paste0(plotID, '_Adult-1 kept on Adult-2 (intersection).pdf')),
+       height = 3, width = 5)
+```
+
+### Adult-2
+
+#### With cross-validation
+
+```{r}
+samdf <- 
+     data.frame(ps.adult2@sam_data) %>% 
+     rownames_to_column(var = 'row')
+```
+
+```{r}
+# Using group k-fold cross-validation data splitting function from caret
+set.seed(1022)
+folds <- 
+     groupKFold(samdf$subj, k = 3)
+
+# Make list for storing results
+results.2 <- list()
+
+# For each fold:
+for (f in folds){
+     # Get sample names of training data
+     samples.train <- samdf$row[f]
+     
+     # Subset the phyloseq object to the training set only
+     ps.train <- 
+          ps.adult2 %>% 
+          prune_samples(samples.train, .) %>% 
+          prune_taxa(taxa_sums(.) > 0, .)
+     
+     # Perform backward selection process, storing results
+     result <- backwards_selection(pdi, 
+                                   ps.train)
+     
+     results.2[[length(results.2) + 1]] <- result
+}
+```
+
+```{r}
+# saveRDS(results.2,
+#         here('data',
+#              'processed',
+#              'Adult-2',
+#              'k-fold CV',
+#              'k = 3 results.rds'))
+```
+
+#### 2 on 1
+
+```{r}
+# Calculate updated correlation coefficient
+# Use helper function from above
+# Get all data
+melt.1 <- 
+     psmelt(ps.adult1) 
+
+# Calculate mean per-participant trnL richness
+richness.1 <- 
+     melt.1 %>% 
+     filter(Abundance > 0) %>% 
+     filter(OTU %in% features.2) %>% # Kept taxa from Adult-1 
+     group_by(Sample, subj) %>% 
+     count() %>% # Richness
+     ungroup() %>% 
+     group_by(subj) %>% 
+     summarize(mean_obs = mean(n)) # Within-subject average richness
+
+richness.1 <- left_join(richness.1, pdi, by = 'subj')
+
+cor.test(richness.1$mean_obs,
+         richness.1$hpdi,
+         method = 'spearman')
+```
+
+### Dropped taxa
+
+Want to examine the lowest-level dropped names across each fold and dataset.
+
+```{r}
+# Read in past results if needed
+results.1 <-
+     here('data',
+          'processed',
+          'Adult-1',
+          'k-fold CV',
+          'k = 3 results.rds') %>%
+     readRDS()
+
+results.2 <-
+     here('data',
+          'processed',
+          'Adult-2',
+          'k-fold CV',
+          'k = 3 results.rds') %>%
+     readRDS()
+```
+
+```{r}
+# Convert list results to data frame
+# Adult-1
+results.1 <- lapply(results.1, 
+                    function(x){data.frame(study = 'Adult-1',
+                                           iter = 1:length(x),
+                                           dropped = x)})
+
+names(results.1) <- 1:length(results.1) # Name by fold number
+
+results.1 <- bind_rows(results.1, .id = 'fold') # Bind all together
+     
+# Repeat for Adult-2
+results.2 <- lapply(results.2, 
+                    function(x){data.frame(study = 'Adult-2',
+                                           iter = 1:length(x),
+                                           dropped = x)})
+
+names(results.2) <- 1:length(results.2) 
+
+results.2 <- bind_rows(results.2, .id = 'fold')
+     
+# Now combine these two
+results <- bind_rows(results.1, results.2)
+rm(results.1, results.2)
+```
+
+```{r}
+# Join with taxonomy
+results <- 
+     data.frame(ps@tax_table) %>% 
+     rownames_to_column(var = 'asv') %>% 
+     right_join(results, by = c('asv' = 'dropped')) %>% 
+     select(study, fold, iter, asv, name, everything()) %>% 
+     arrange(study, fold, iter)
+```
+
+```{r}
+# Summarize most common within dataset
+results %>% 
+     group_by(asv, name) %>% 
+     count() %>% 
+     arrange(desc(n))
+```
+```{r}
+# Do the same pulling back 5 iterations, since this gave better performance? 
+results %>% 
+     group_by(study, fold) %>% 
+     filter(row_number() <= (n() - 5)) %>% 
+     ungroup() %>% 
+     group_by(asv, name) %>% 
+     count() %>% 
+     arrange(desc(n))
+```
+Would it also be reasonable to apply a weight? Assuming that earlier things discarded are weighted more heavily.  Could sum iteration numbers to get a score, and then rank by this score?
+
+```{r}
+results %>% 
+     group_by(study, fold) %>% 
+     filter(row_number() <= (n() - 5)) %>% 
+     ungroup() %>% 
+     group_by(asv, name) %>% 
+     summarize(n = length(iter), 
+               score = sum(iter)) %>% 
+     arrange(desc(n), score)
+```
+
+Only those dropped in all 3 folds of cohort:
+
+```{r}
+results %>% 
+     group_by(study, asv, name) %>%
+     count() %>% 
+     filter(n == 3)
+```
+
+The first 5 drops of each fold: 
+```{r}
+results %>% 
+     group_by(study, fold) %>% 
+     slice_head(n = 5) %>% 
+     View()
+```
+
+Consider instead what's kept:
+```{r}
+# Remove any ASV that dropped in all 3 folds of either dataset
+dropped.in.3 <- 
+     results %>% 
+     group_by(study, asv, name) %>%
+     count() %>% 
+     filter(n == 3) %>% 
+     pull(asv) 
+
+ps %>% 
+     prune_taxa(!(taxa_names(.) %in% dropped.in.3), .) %>% 
+     psmelt() %>% 
+     pull(name) %>% 
+     unique() %>% sort()
 ```
 
