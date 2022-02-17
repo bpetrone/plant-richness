@@ -72,54 +72,17 @@ cumulative.df <-
 
 ## Diet surveys
 
-### ASA24
+### DHQ3-based HEI
+
+Calculated in Adult-1, Adult-2 dietary indices notebook.
 
 ```{r}
-# CHOMP-only food counts
-recall <- 
-     here('..',
-          'chomp',
-          'data', 
+fvs <- 
+     here('data',
           'processed',
-          'ASA24', 
-          'Food_Tree',
-          'richness_ASA24.rds') %>% 
-     readRDS()
-```
-
-### DHQ3
-
-#### Adult-1
-
-```{r}
-ffq.adult1 <- 
-     here('data', 
-          'processed', 
-          'Adult-1', 
-          'DHQ3.csv') %>% 
+          'DHQ3',
+          'Adult-1 and Adult-2 dietary indices.csv') %>% 
      read_csv()
-
-head(ffq.adult1)
-```
-
-#### Adult-2
-
-```{r}
-ffq.adult2 <- 
-     here('data', 
-          'processed', 
-          'Adult-2', 
-          'DHQ3.csv') %>% 
-     read_csv()
-
-head(ffq.adult2)
-```
-
-```{r}
-# Join together
-ffq <- bind_rows(ffq.adult1, ffq.adult2)
-
-rm(ffq.adult1, ffq.adult2)
 ```
 
 # Pre-process
@@ -159,51 +122,6 @@ alpha <-
 
 Then below, can just filter by desired threshold in order to calculate measures.
 
-## Diet surveys
-
-### ASA24
-
-```{r}
-recall
-```
-
-### DHQ3
-
-```{r}
-range(ffq$`Energy (kcal)`, na.rm = TRUE)
-```
-
-
-```{r}
-# Crude quality filter
-ffq <- filter(ffq, 
-              !(`Energy (kcal)` < 500 | `Energy (kcal)` > 4000))
-```
-
-```{r}
-ffq <- select(ffq, 
-              subj,
-              sex = `Sex (1=male; 2=female)`, 
-              matches('HEI'))
-names(ffq)
-```
-
-```{r}
-ffq <- 
-     ffq %>% 
-     rename(hei_tot = 'Total HEI-2015 Score',
-            hei_veg = 'HEI-2015 - Total Vegetables - Component Score',
-            hei_greensbeans = 'HEI-2015 - Greens and Beans - Component Score',
-            hei_fruit = 'HEI-2015 - Total Fruits - Component Score',
-            hei_wholefruits = 'HEI-2015 - Whole Fruits - Component Score',
-            hei_grain = 'HEI-2015 - Whole Grains - Component Score') %>% 
-     # Make custom plant column
-     mutate(hei_plant_all = hei_veg + hei_greensbeans + hei_fruit + 
-                 hei_wholefruits + hei_grain,
-            hei_non_plant = hei_tot - hei_plant_all)
-
-ffq
-```
 # Analyze
 
 ```{r}
@@ -271,455 +189,6 @@ range(adult.stats$med, na.rm = T)
 range(adult.stats$sd, na.rm = T)
 ```
 
-### Within-subject vs. between-subject
-
-#### ANOVA (R01 ONLY)
-
-```{r}
-# Adult-1 
-mod.1 <- 
-     alpha %>% 
-     filter(study == 'Adult-1') %>% 
-     aov(obs ~ subj, data = . )
-
-summary(mod.1)
-```
-
-```{r}
-# Get partitioning of variance
-var.between <- summary(mod.1)[[1]]['Mean Sq'][1,]
-var.within <- summary(mod.1)[[1]]['Mean Sq'][2,]
-```
-
-Now need to get means. But it's not entirely clear to me *what* mean to use here. The mean of each subject's average richness? This is what it looks like in this assay development link: https://influentialpoints.com/Training/coefficient_of_variation.htm 
-```{r}
-u <- 
-     alpha %>% 
-     filter(study == 'Adult-1') %>% 
-     group_by(subj) %>% 
-     summarize(mu_subj = mean(obs, na.rm = T)) %>% # Mean per-subject richness
-     ungroup() %>% 
-     summarize(mu_pop = mean(mu_subj, 
-                             na.rm = T)) # Population mean of mean per-subject richness
-
-u
-```
-```{r}
-cat('Within', 100*sqrt(var.within)/u$mu_pop, '\n')
-cat('Between', 100*sqrt(var.between)/u$mu_pop, '\n')
-```
-
-
-```{r}
-# Adult-2 
-mod.2 <- 
-     alpha %>% 
-     filter(study == 'Adult-2') %>% 
-     aov(obs ~ subj, data = . )
-
-summary(mod.2)
-```
-
-```{r}
-# Get partitioning of variance
-var.between <- summary(mod.2)[[1]]['Mean Sq'][1,]
-var.within <- summary(mod.2)[[1]]['Mean Sq'][2,]
-```
-
-Now need to get means. But it's not entirely clear to me *what* mean to use here. The mean of each subject's average richness? This is what it looks like in this assay development link: https://influentialpoints.com/Training/coefficient_of_variation.htm 
-```{r}
-u <- 
-     alpha %>% 
-     filter(study == 'Adult-2') %>% 
-     group_by(subj) %>% 
-     summarize(mu_subj = mean(obs, na.rm = T)) %>% # Mean per-subject richness
-     ungroup() %>% 
-     summarize(mu_pop = mean(mu_subj, 
-                             na.rm = T)) # Population mean of mean per-subject richness
-
-u
-```
-```{r}
-cat('Within', 100*sqrt(var.within)/u$mu_pop, '\n')
-cat('Between', 100*sqrt(var.between)/u$mu_pop, '\n')
-```
-
-
-### Overall
-
-```{r}
-mod <- 
-     aov(obs ~ subj, data = alpha)
-
-summary(mod)
-```
-
-```{r}
-# Get partitioning of variance
-var.between <- summary(mod)[[1]]['Mean Sq'][1,]
-var.within <- summary(mod)[[1]]['Mean Sq'][2,]
-```
-
-Now need to get means. But it's not entirely clear to me *what* mean to use here. The mean of each subject's average richness? This is what it looks like in this assay development link: https://influentialpoints.com/Training/coefficient_of_variation.htm 
-```{r}
-u <- 
-     alpha %>% 
-     group_by(subj) %>% 
-     summarize(mu_subj = mean(obs, na.rm = T)) %>% # Mean per-subject richness
-     ungroup() %>% 
-     summarize(mu_pop = mean(mu_subj, 
-                             na.rm = T)) # Population mean of mean per-subject richness
-
-u
-```
-```{r}
-cat('Within', 100*sqrt(var.within)/u$mu_pop, '\n')
-cat('Between', 100*sqrt(var.between)/u$mu_pop, '\n')
-```
-
-#### Permutation-based strategy
-
-##### Raw data
-
-Aggregating within-subject CVs using info from (this site) [https://www-users.york.ac.uk/~mb55/meas/cv.htm]: "We find the coefficient of variation for each subject separately, square these, find their mean, and take the square root of this mean. We can call this the root mean square approach."
-
-```{r}
-within.between <- 
-     alpha %>% 
-     group_by(study, subj) %>% 
-     summarize(sigma = sd(obs, na.rm = T),
-               mu = mean(obs, na.rm = T)) %>% 
-     mutate(cv_within = sigma/mu)
-```
-
-```{r}
-# Now summarize as above
-within.between %>% 
-     ungroup() %>% 
-     mutate(cv_within_sq = cv_within^2) %>% # Square them
-     # group_by(study) %>% 
-     summarize(mean_sq = mean(cv_within_sq)) %>% # Find the mean
-     mutate(root_mean_sq = sqrt(mean_sq)) # Take the square root
-```
-```{r}
-# Now calculate for overall data
-alpha %>% 
-     group_by(study, subj) %>% 
-     summarize(mu_subj = mean(obs, na.rm = T)) %>% # Mean per-subject richness
-     ungroup() %>% 
-     # group_by(study) %>% 
-     summarize(
-          mu_pop = mean(mu_subj, 
-                        na.rm = T), # Population mean of mean per-subject obs.
-          sigma_pop = sd(mu_subj, 
-                         na.rm = T)) %>% # Population sd
-     mutate(cv_between = sigma_pop/mu_pop) 
-```
-
-```{r}
-# Calculate standard deviation for overall cohort and join to data
-within.between <- 
-     alpha %>% 
-     group_by(study, subj) %>% 
-     summarize(mu_subj = mean(obs, na.rm = T)) %>% # Mean per-subject richness
-     ungroup() %>% 
-     group_by(study) %>% 
-     summarize(
-          mu_pop = mean(mu_subj, 
-                        na.rm = T), # Population mean of mean per-subject richness
-          sigma_pop = sd(mu_subj, 
-                         na.rm = T)) %>% # Population sd
-     mutate(cv_between = sigma_pop/mu_pop) %>% 
-     select(study, cv_between) %>% 
-     right_join(within.between)
-```
-
-```{r}
-# Calculate difference
-within.between <- 
-     mutate(within.between,
-            delta = cv_within - cv_between)
-```
-
-```{r}
-# Plot raw data
-ggplot(within.between, aes(x = study, y = cv_within)) +
-     geom_boxplot() +
-     ylab('Within-subject CV') +
-     theme_bw() +
-     theme(axis.title.x = element_blank())
-```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('..', 
-            'development', 
-            'docs',
-            'r01', 
-            '2021_11',
-            'within-between',
-            paste0(plotID, '_CV on rarefied richness.pdf')),
-       height = 3, width = 3)
-```
-
-```{r}
-# Plot delta
-ggplot(within.between, aes(x = study, y = delta)) +
-     geom_boxplot() +
-     ylab('Within-subject CV - between-subject CV') +
-     theme_bw() +
-     theme(axis.title.x = element_blank())
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('..', 
-            'development', 
-            'docs',
-            'r01', 
-            '2021_11',
-            'within-between',
-            paste0(plotID, '_delta CV on raw richness.pdf')),
-       height = 3, width = 3)
-```
-
-##### Shuffled data
-
-```{r}
-set.seed(10222021)
-
-# Shuffle
-alpha.rand <- alpha 
-alpha.rand$obs <- sample(alpha.rand$obs, length(alpha.rand$obs))
-```
-
-```{r}
-within.between.rand <- 
-     alpha.rand %>% 
-     group_by(study, subj) %>% 
-     summarize(sd_within = sd(obs))
-```
-
-```{r}
-# Calculate standard deviation for overall cohort ad join to data
-within.between.rand <- 
-     alpha.rand %>% 
-     group_by(study, subj) %>% 
-     summarize(mean = mean(obs)) %>% 
-     ungroup() %>% 
-     group_by(study) %>% 
-     summarize(sd_between = sd(mean)) %>% 
-     right_join(within.between.rand)
-```
-
-```{r}
-# Calculate difference
-within.between.rand <- 
-     mutate(within.between.rand,
-            delta = sd_within - sd_between)
-```
-
-```{r}
-# Bind together
-within.between$data <- 'Raw'
-within.between.rand$data <- 'Shuffled'
-```
-
-```{r}
-within.between <- bind_rows(within.between,
-                            within.between.rand)
-```
-
-```{r}
-ggplot(within.between, aes(x = data, y = delta)) +
-     geom_boxplot() + 
-     facet_wrap(~study) + 
-     labs(y = 'sd (within) - sd (between)') +
-     theme_bw() +
-     theme(axis.title.x = element_blank())
-```
-
-
-#### KS test
-
-```{r}
-# Get vector for between-subject distribution: the mean trnL richness of each subject
-
-between <- 
-     adult.stats %>% 
-     filter(study == 'Adult-1') %>% 
-     pull(mean)
-
-subjects <- 
-     adult.stats %>% 
-     filter(study == 'Adult-1') %>% 
-     pull(subj) %>% 
-     sort()
-
-results.df <- 
-     data.frame(
-          study = NULL,
-          subj = NULL,
-          D = NULL,
-          P = NULL
-     )
-
-for (s in subjects){
-     # Compare between-subjects distribution to within-subject distribution
-     # for this particular subject
-     result <- 
-          alpha %>% 
-          filter(subj == s) %>% 
-          pull(obs_rare) %>% 
-          ks.test(., between)
-     
-     row = c('Adult-1', s, result$statistic, result$p.value)
-     names(row) <- c('study', 'subj', 'D', 'p')
-     
-     results.df <- bind_rows(results.df, row)
-}
-```
-
-```{r}
-# Plot results as p-value histogram
-results.df$p <- as.numeric(results.df$p)
-
-hist(results.df$p, breaks = 20)
-```
-
-
-```{r}
-fit.within <- 
-     aov(obs ~ subj,
-         data = alpha)
-```
-
-```{r}
-summary(fit.within)
-```
-
-Think I need an additional layer of summarizing here??
-
-```{r}
-fit.between <- 
-     aov(obs ~ study,
-         data = alpha)
-```
-
-```{r}
-summary(fit.between)
-```
-
-
-```{r}
-aov(obs ~ study + subj,
-         data = alpha) %>% 
-     summary()
-```
-
-
-### Mean vs. variance
-
-```{r}
-# Add cohort information in order to calculate separately
-adult.stats <- 
-     samdf %>% 
-     select(subj, study) %>% 
-     right_join(adult.stats) %>% 
-     distinct()
-```
-
-```{r}
-# Adult-1
-adult.stats %>% 
-     filter(study == 'Adult-1') %>% 
-     cor.test(~ mean + var,
-              data = ., 
-              method = 'spearman')
-```
-
-```{r}
-# Adult-2
-adult.stats %>% 
-     filter(study == 'Adult-2') %>% 
-     cor.test(~ mean + var,
-              data = ., 
-              method = 'spearman')
-```
-
-```{r}
-# Average trnL richness within each subject
-alpha.mean <-
-     alpha %>% 
-     group_by(study, subj) %>% 
-     summarize(mean = mean(obs),
-               mean_shannon = mean(Shannon),
-               mean_rare = mean(obs_rare, na.rm = TRUE)) %>% 
-     ungroup()
-```
-
-```{r}
-# How well do these numbers correlate, now that there are different numbers of observations?
-ggplot(alpha.mean, aes(x = mean, y = mean_rare)) +
-     geom_abline(slope = 1,
-                 intercept = 0, 
-                 color = 'gray80',
-                 linetype = 'dashed') +
-     geom_point() +
-     coord_equal() +
-     labs(x = 'Mean *trnL* richness<br>\n(All samples)', 
-          y = 'Mean rarefied *trnL* richness<br>(>10,500 reads)') +
-     xlim(0, 40) + ylim(0, 40) +
-     theme_classic() +
-     theme(axis.title.x = ggtext::element_markdown(),
-           axis.title.y = ggtext::element_markdown())
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results', 
-#             'manuscript',
-#             'supplemental',
-#             paste0(plotID, '_rarefied vs observed trnL richness (mean).pdf')),
-#        height = 4, width = 4)
-```
-
-```{r}
-# Average trnL richness within each subject
-alpha.median <-
-     alpha %>% 
-     group_by(study, subj) %>% 
-     summarize(median = median(obs, na.rm = TRUE),
-               median_rare = median(obs_rare, na.rm = TRUE)) %>% 
-     ungroup()
-```
-
-```{r}
-# How well do these numbers correlate, now that there are different numbers of observations?
-ggplot(alpha.median, aes(x = median, y = median_rare)) +
-     geom_abline(slope = 1,
-                 intercept = 0, 
-                 color = 'gray80',
-                 linetype = 'dashed') +
-     geom_point() +
-     coord_equal() +
-     labs(x = 'Median *trnL* richness<br>\n(All samples)', 
-          y = 'Median rarefied *trnL* richness<br>(>10,500 reads)') +
-     xlim(0, 40) + ylim(0, 40) +
-     theme_classic() +
-     theme(axis.title.x = ggtext::element_markdown(),
-           axis.title.y = ggtext::element_markdown())
-```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results', 
-#             'manuscript',
-#             'supplemental',
-#             paste0(plotID, '_rarefied vs observed trnL richness (median).pdf')),
-#        height = 4, width = 4)
-```
-
-Based on above plots, move forward with mean
-
 ## HEI
 
 ### Mean per-participant pMR
@@ -752,16 +221,16 @@ alpha.mean <-
      ungroup()
 
 # Replacing NAs with 0s (strict interpretation as *no* plant matter)
-alpha.mean.0 <- 
-     alpha.wide %>% 
-     mutate(across(starts_with('obs_'),
-                   ~ifelse(is.na(.x),
-                           yes = 0,
-                           no = .x))) %>% 
-     group_by(study, subj) %>% 
-     summarise(across(starts_with('obs'),
-                      ~mean(.x, na.rm = TRUE))) %>% 
-     ungroup()
+# alpha.mean.0 <- 
+#      alpha.wide %>% 
+#      mutate(across(starts_with('obs_'),
+#                    ~ifelse(is.na(.x),
+#                            yes = 0,
+#                            no = .x))) %>% 
+#      group_by(study, subj) %>% 
+#      summarise(across(starts_with('obs'),
+#                       ~mean(.x, na.rm = TRUE))) %>% 
+#      ungroup()
 
 rm(alpha.wide)
 ```
@@ -771,8 +240,8 @@ rm(alpha.wide)
 ```{r}
 # Join to FFQ data
 ffq <- 
-     alpha.mean.0 %>%
-     # alpha.mean %>% 
+     # alpha.mean.0 %>%
+     alpha.mean %>%
      left_join(ffq)
 ```
 
@@ -786,13 +255,13 @@ ffq %>%
 
 This is 5 at baseline, and 9 with crude calorie filter.
 
-### Visualizations (joint)
+### Visualize
 
 ```{r}
 # Make long for easy vis at all rarefaction thresholds
 ffq.long <- 
      ffq %>%
-     rename(obs_Raw = obs) %>% 
+     rename(obs_raw = obs) %>% 
      pivot_longer(starts_with('obs'),
                   names_to = 'rarefaction',
                   values_to = 'pMR') %>% 
@@ -811,45 +280,27 @@ ffq.long
 
 
 ```{r}
-ggplot(ffq.long, aes(x = hei_plant_all, y = pMR)) +
-     geom_point(alpha = 0.7, size = 2) +
-     facet_grid(vars(study), vars(rarefaction),
-                scales = 'free') +
-     labs(y = 'Mean pMR', 
-          x = 'HEI-2015\nplant components score')
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results',
-            'manuscript',
-            '3',
-            paste0(plotID, 
-                   '_rarefied trnL richness (below threshold as 0) x HEI plant.pdf')),
-       device = cairo_pdf(),
-       height = 3, width = 7)
-```
-
-```{r}
-# Manuscript plot
 ffq.long %>% 
-     filter(rarefaction == 1000) %>% 
+     filter(is.na(rarefaction)) %>% 
      ggplot(aes(x = hei_plant_all, y = pMR)) +
-     geom_point(alpha = 0.7, size = 2) +
-     facet_wrap(~study) +
+     geom_point(alpha = 0.8, size = 2) +
+     facet_wrap(~study,
+                nrow = 2) +
      labs(y = 'Mean pMR', 
-          x = 'HEI-2015\nplant components score')
+          x = 'HEI-2015\n(plant components)')
 ```
+
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results',
             'manuscript',
             '3',
             paste0(plotID, 
-                   '_rarefied trnL richness (below threshold as 0) x HEI plant.pdf')),
-       device = cairo_pdf(),
-       height = 3, width = 4)
+                   '_raw trnL richness x HEI plant.pdf')),
+       device = cairo_pdf,
+       height = 4, width = 2.5)
 ```
+
 
 ```{r}
 # Plant HEI
@@ -869,8 +320,6 @@ ffq.long %>%
                p = cor.test(~pMR + hei_tot,
                              method = 'spearman')$p.value)
 ```
-
-
 ```{r}
 # Non-plant HEI
 ffq.long %>% 
@@ -885,7 +334,7 @@ ffq.long %>%
 ### Adult-1
 
 ```{r}
-# Get sample data for Adult-2
+# Get sample data
 samdf <- 
      data.frame(ps@sam_data) %>% 
      rownames_to_column(var = 'row') %>% 
