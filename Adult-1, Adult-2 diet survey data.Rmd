@@ -112,6 +112,22 @@ pdi.adult2 <-
 head(pdi.adult2)
 ```
 
+## Demographic data
+
+For Harris-Benedict equation
+
+```{r}
+# In sample metadata of trnL phyloseq object
+samdf <- 
+     here('data',
+          'processed',
+          'phyloseq',
+          'trnL_combined_ps.rds') %>% 
+     readRDS() %>% 
+     sample_data() %>% 
+     data.frame()
+```
+
 # Pre-process
 
 ```{r}
@@ -199,35 +215,103 @@ A minimum 10 kcal filter removes 3 participants who it appears minimally complet
 Other ideas for more data cleaning-- check for survey completeness, change sample ID to CHOMP participant ID, quality/sanity checks on data, filter incomplete responses...
 
 ```{r}
-range(summary$`Energy (kcal)`,
-      na.rm = TRUE)
+# Get subject demographics to calculate Harris-Benedict
+samdf <- 
+     samdf %>% 
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     select(study, subj,
+            age, gender, kg, m) %>% 
+     distinct()
+
+samdf
+```
+```{r}
+# Join to reported kcal intakes
+samdf <- 
+     summary %>% 
+     select(subj,
+            kcal = `Energy (kcal)`) %>% 
+     right_join(samdf) %>% 
+     select(study, subj, kcal, everything())
+
+samdf
 ```
 
-## Normalize to kcal intake
+### Harris-Benedict equation
 
-```{r eval = FALSE}
-# Get columns to normalize
-# names(ffq)
+Following latest revised version [here](https://en.wikipedia.org/wiki/Harris–Benedict_equation).
+
+```{r}
+samdf <-
+     samdf %>% 
+     mutate(harris_benedict = 
+                 ifelse(gender == 'Male',
+                        yes = 10*kg + 6.25*(100*m) - 5*age + 5,
+                        no = 10*kg + 6.25*(100*m) - 5*age + 161))
 ```
 
-```{r eval = FALSE}
-# norm.cols <- 
-#      ffq %>% 
-#      select(`*Gluten (g)`:`Alcohol drinks`) %>% 
-#      names()
+In Asnicar, FFQ data was excluded if "Submitted FFQs were excluded if more than 10 food items were left unanswered or if the total energy intake estimate derived from the FFQ as a ratio of the participant’s estimated basal metabolic rate (determined by the Harris–Benedict equation) was more than 2 s.d. outside the mean of this ratio (<0.52 or >2.58)."
+
+```{r}
+# Calculate ratio
+samdf <- 
+     samdf %>% 
+     mutate(energy_ratio = harris_benedict/kcal) %>% 
+     select(study, 
+            subj, 
+            kcal,
+            harris_benedict,
+            energy_ratio)
+
+# What's mean and SD?
+median(samdf$energy_ratio, na.rm = TRUE)
+mad(samdf$energy_ratio, na.rm = TRUE)
 ```
 
-```{r eval = FALSE}
-# Calculate estimate of amount per 1000 kcal
-# ffq <- 
-#      ffq %>% 
-#      mutate(across(one_of(norm.cols),
-#                    ~ .x/`Energy (kcal)`*1000,
-#                    .names = '{.col}_per_1000kcal'
-#                    )
-#      )
+```{r}
+median(samdf$energy_ratio, na.rm = TRUE) + 2*mad(samdf$energy_ratio, na.rm = TRUE)
+median(samdf$energy_ratio, na.rm = TRUE) - 2*mad(samdf$energy_ratio, na.rm = TRUE)
 ```
 
+```{r}
+ggplot(samdf, aes(x = energy_ratio)) +
+     geom_histogram(binwidth = 0.2,
+                    boundary = 0) + 
+     geom_vline(xintercept = 1, color = 'green', linetype = 'dashed') +
+     geom_vline(xintercept = 1.755, color = 'red', linetype = 'dashed') +
+     geom_vline(xintercept = 0.217, color = 'red', linetype = 'dashed') +
+     # facet_wrap(~study) +
+     labs(x = 'BMR : reported intake\nkcal ratio',
+          y = 'Frequency')
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'diet surveys',
+            'ffq',
+            paste0(plotID, '_BMR to reported intake kcal ratios.pdf')),
+       height = 2.5, width = 3)
+```
+
+```{r}
+# Flag those that fall outside median +/- 2 median absolute deviations
+samdf <- 
+     samdf %>% 
+     mutate(pass_qc = ifelse(energy_ratio <= 1.755695 & energy_ratio >= 0.2165082,
+                             yes = TRUE,
+                             no = FALSE))
+
+samdf %>% 
+     group_by(pass_qc) %>% 
+     count()
+```
+Ok, so this brings us up to 12 people excluded from this analysis.  Does it differ by study?
+
+```{r}
+samdf %>% 
+     group_by(study, pass_qc) %>% 
+     count()
+```
 # Calculate indices
 
 ### FVS
