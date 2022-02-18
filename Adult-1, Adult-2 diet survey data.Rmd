@@ -438,7 +438,10 @@ dim(fvs.plant)
 ```
 
 ```{r}
-fvs <- full_join(fvs.tot, fvs.plant)
+fvs <- 
+     full_join(fvs.tot, fvs.plant) %>% 
+     mutate(fvs_animal = fvs_tot - fvs_plant)
+
 rm(fvs.tot, fvs.plant)
 
 fvs
@@ -451,13 +454,14 @@ fvs %>%
                   values_to = 'value') %>% 
      mutate(score = factor(score,
                            levels = c('fvs_tot', 
-                                      'fvs_plant'))) %>% 
+                                      'fvs_plant',
+                                      'fvs_animal'))) %>% 
      ggplot(aes(x = study, y = value, color = score)) +
      geom_boxplot() +
      labs(y = 'Dietary index score', color = 'FVS') +
-     scale_color_manual(values = c('#57606c', '#59a14f'),
-                        labels = c('Total items',
-                                   'Plant items')) +
+     # scale_color_manual(values = c('#57606c', '#59a14f'),
+     #                    labels = c('Total items',
+     #                               'Plant items')) +
      theme(axis.title.x = element_blank())
 ```
 
@@ -497,6 +501,7 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 #        height = 2.5, width = 4)
 ```
 
+Overall, each component score (plant or animal) is much more strongly correlated with the total than it is with the other component.
 
 ```{r}
 cor.test(fvs$fvs_plant,
@@ -504,7 +509,17 @@ cor.test(fvs$fvs_plant,
          method = 'spearman') 
 ```
 
-Would be good to inspect a few of these entries and see if they hold.
+```{r}
+cor.test(fvs$fvs_plant,
+         fvs$fvs_animal,
+         method = 'spearman') 
+```
+
+```{r}
+cor.test(fvs$fvs_tot,
+         fvs$fvs_animal,
+         method = 'spearman') 
+```
 
 ### DDS
 
@@ -603,13 +618,26 @@ resids$fvs_plant_residual <- resid(mod_plant)
 output <- left_join(output, resids)
 ```
 
+```{r}
+# Linear model (plant items)
+mod_animal <- lm(fvs_animal ~ kcal, data = output)
+summary(mod_animal)
+
+# Get input data, for joining back to full results
+resids <- mod_animal$model
+
+# Populate with residuals
+resids$fvs_animal_residual <- resid(mod_animal)
+output <- left_join(output, resids)
+```
+
 ### HEI
 
 ```{r}
 ggplot(output, aes(x = kcal, y = hei_plant_all + hei_non_plant)) +
      geom_point() +
      labs(x = 'Energy intake (kcal)',
-          y = 'PDI')
+          y = 'HEI')
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
@@ -626,6 +654,8 @@ mod_tot <- lm(hei_plant_all + hei_non_plant ~ kcal, data = output)
 
 summary(mod_tot)
 ```
+
+Also checked components individually, and these aren't significant either. 
 
 ### PDI
 
