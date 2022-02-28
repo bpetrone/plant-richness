@@ -1,5 +1,5 @@
 ---
-title: "Figure 1"
+title: "Weight Loss analyses"
 output: html_notebook
 ---
 
@@ -21,17 +21,44 @@ library(tidyverse)
 select <- dplyr::select
 ```
 
+```{r}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold'),
+                    legend.title = element_text(size = 12,
+                                              face = 'bold'),
+                    legend.text = element_text(size = 12)
+                     )
+)
+```
+
 # Load data
 
 ## trnL richness (+/- rarefaction)
+
+```{r}
+ps <- 
+     here('data',
+          'processed', 
+          'phyloseq',
+          'trnL_combined_ps.rds') %>% 
+     readRDS()
+```
 
 ```{r}
 alpha <- 
      here('data', 
           'processed', 
           'rarefaction',
-          'Rarefied trnL counts (10,500 reads).rds') %>% 
+          'Rarefied trnL counts.rds') %>% 
      readRDS()
+
+alpha
 ```
 
 ## Weight Loss menu data
@@ -62,23 +89,25 @@ nutrients <-
 
 ```{r}
 # Subset to Weight Loss samples and metadata only
+# Remove PCR failures (0 reads by sequencing)
 alpha <- 
      alpha %>% 
-     filter(study == 'Weight Loss') %>% 
-     # Drop columns that are all NA
-     select(
-          where(function(x){ 
-               !all(is.na(x))
-          })
-     ) %>% 
-      # Re-order remainder
-     select(
-          subj,
-          date,
-          obs, 
-          threshold, 
-          starts_with('obs_rare')
-          ) 
+     filter(grepl(pattern = 'DFC', name) & reads_food != 0) 
+
+alpha
+```
+
+```{r}
+# Bind to Weight Loss sample metadata: date
+samdf <- 
+     data.frame(ps@sam_data) %>% 
+     rownames_to_column(var = 'row')
+
+alpha <- 
+     samdf %>% 
+     select(name = row, subj, date) %>% 
+     right_join(alpha) %>% 
+     select(name, subj, date, everything())
 
 alpha
 ```
@@ -143,7 +172,7 @@ nutrients$`fat (g)_pct_tot` <- nutrients$`fat (g)`*9/nutrients$calories
 nutrients %>% select(ends_with('pct_tot')) %>% rowSums() %>% round()
 ```
 
-Ok, good, all within rounding error. 
+Ok, good, all within rounding error. May want to consider residuals here?
 
 ### Calculate richness
 
@@ -211,7 +240,7 @@ Median within each subject
 alpha.menu %>% 
      group_by(subj) %>% 
      summarize(median = median(obs_menu),
-               sd = sd(obs_menu))
+               mad = mad(obs_menu))
 ```
 
 ```{r}
@@ -220,7 +249,17 @@ alpha.menu %>%
      filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
      group_by(subj) %>% 
      summarize(median = median(obs_menu),
-               sd = sd(obs_menu))
+               mad = mad(obs_menu))
+```
+
+```{r}
+# trnL
+alpha %>% 
+     group_by(subj) %>% 
+     select(-(threshold:se)) %>% 
+     distinct() %>% 
+     summarize(median = median(obs),
+               mad = mad(obs))
 ```
 
 ## Correlation with trnL richness
@@ -234,6 +273,106 @@ First, might want to understand day-to-day variability in trnL richness compared
 
 ### Raw richness
 
+#### Range 
+```{r}
+# Pivot data to long form by method
+# Need to choose rarefied or raw data
+alpha.range <- 
+     alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday',
+                                  'Sunday'))) %>%
+     select(subj, date, obs, obs_menu) %>% 
+     distinct() %>% 
+     pivot_longer(cols = -c(subj, date),
+                  names_to = 'measure',
+                  values_to = 'richness') %>% 
+     mutate(measure = ifelse(measure == 'obs',
+                             yes = 'Metabarcoding',
+                             no = 'Menu'))
+
+alpha.range
+```
+
+```{r}
+# Factor subjects
+alpha.range$subj <- 
+     factor(alpha.range$subj,
+            levels = c('JN55', 'AK65', 'PC74', 'ML48'),
+            labels = 1:4)
+```
+
+```{r}
+# Note this is already filtered above to exclude weekdays
+ggplot(alpha.range,
+       aes(x = subj, 
+           y = richness,
+           color = measure,
+           group = measure)) +
+     geom_point(
+          alpha = 0.8,
+          size = 2,
+          position = position_jitterdodge(jitter.width = 0.2,
+                                          dodge.width = 0.8
+          )) +
+     scale_color_manual(values = c('gray40', '#8ace7e')) +
+     labs(x = 'Participant', 
+          y = 'Plant richness', 
+          color = 'Measure') +
+     scale_y_continuous(limits = c(0, 59)) +
+     theme(
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.major.y = element_line(linetype = 'dashed'),
+          legend.position = 'top')
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'weight loss',
+            paste0(plotID, '_raw pMR x menu richness (all days).pdf')),
+       height = 3, width = 4)
+```
+
+Think this should be a two-way ANOVA (e.g. factorial ANOVA with 2 factors).  Though as before I think the data likely violate some assumptions.  
+
+```{r}
+anova <- aov(richness ~ subj * measure, 
+             data = alpha.range)
+```
+
+Check ANOVA assumptions
+
+```{r}
+# Homogeneity of variances
+plot(anova, 1)
+leveneTest(richness ~ subj * measure, data = alpha.range)
+```
+
+```{r}
+# Normality
+plot(anova, 2)
+
+# Run Shapiro-Wilk test
+aov.residuals <- residuals(object = anova)
+shapiro.test(x = aov.residuals)
+```
+
+Chief among them is the unbalanced design, so use adjustments from car package's ANOVA:
+
+```{r}
+car::Anova(anova, type = 'III')
+```
+
+```{r}
+# Post-hoc tests on measure
+TukeyHSD(anova)
+```
+
+#### Correlation
+
 ```{r}
 # 1 day of lag
 lag <- 'delta1'
@@ -244,7 +383,8 @@ alpha.joint <-
      select(subj,
             date,
             date_menu = all_of(lag), 
-            starts_with('obs')) %>% 
+            starts_with('obs'),
+            threshold) %>% 
      # mutate(delta = gsub('delta', '', lag)) %>% 
      left_join(alpha.menu) %>% 
      select(subj,
@@ -255,170 +395,59 @@ alpha.joint <-
 
 head(alpha.joint)
 ```
-Range of menu taxa compared to range of trnL taxa
-```{r}
-# Pivot data to long form by method
-alpha.range <- 
-     alpha.joint %>% 
-     select(subj, obs, obs_menu) %>% 
-     pivot_longer(cols = -subj,
-                  names_to = 'measure',
-                  values_to = 'richness') %>% 
-     mutate(measure = ifelse(measure == 'obs',
-                             yes = 'Metabarcoding',
-                             no = 'Menu'))
-
-alpha.range
-```
-```{r}
-# Factor subjects
-alpha.range$subj <- 
-     factor(alpha.range$subj,
-            levels = c('JN55', 'AK65', 'PC74', 'ML48'),
-            labels = 1:4)
-```
-
-```{r}
-ggplot(alpha.range, aes(x = subj, y = richness, color = measure)) +
-     geom_boxplot() +
-     scale_color_manual(values = c('black', 'darkgreen')) +
-     labs(x = 'Participant', 
-          y = 'Plant taxon richness', 
-          color = 'Measure') +
-     theme_classic() +
-     theme(axis.title = element_text(size = 14),
-           legend.position = c(1, 0.8),
-           legend.justification = 'right')
-```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 'manuscript', '1',
-            paste0(plotID, '_A_trnL richness x menu richness.pdf')),
-       height = 3, width = 4)
-```
-
-```{r}
-ggplot(alpha.joint, aes(x = obs_menu, y = obs)) +
-     geom_point(size = 2, alpha = 0.8) +
-     lims(x = c(7, 46), y = c(7, 46)) +
-     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
-     coord_equal() +
-     theme_bw() +
-     theme(axis.title.y = ggtext::element_markdown()) +
-     theme(axis.title = element_text(size = 14))
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results', 
-#             'manuscript', 
-#             '1',
-#             paste0(plotID, '_B_trnL richness x menu richness.pdf')),
-#        height = 3, width = 3)
-```
-
-```{r}
-cor.test(alpha.joint$obs,
-         alpha.joint$obs_menu,
-         method = 'spearman',
-         alternative = 'greater')
-```
-
-### Rarefied richness
-```{r}
-cor.test(alpha.joint$obs_rare,
-         alpha.joint$obs_menu,
-         method = 'spearman',
-         alternative = 'greater')
-```
-
-```{r}
-ggplot(alpha.joint, aes(x = obs_menu, y = obs_rare)) +
-     geom_point(size = 2, alpha = 0.8) +
-     lims(x = c(7, 46), y = c(7, 46)) +
-     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
-     coord_equal() +
-     theme_bw() +
-     theme(axis.title.y = ggtext::element_markdown()) +
-     theme(axis.title = element_text(size = 14))
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 'manuscript', '1',
-            paste0(plotID, '_B_trnL richness x menu richness.pdf')),
-       height = 3, width = 3)
-```
-
-
-Should I test other days, or leave it at that?
-
-What about excluding weekends?
 
 ```{r}
 alpha.joint %>% 
-     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>%
-     cor.test(~ obs_rare + obs_menu, 
+     select(-c(threshold, obs_rare)) %>% 
+     distinct() %>% 
+     ggplot(aes(x = obs_menu, y = obs)) +
+     geom_point(size = 2, alpha = 0.6) +
+     # geom_abline(slope = 1, intercept = 0,
+     #             linetype = 'dashed',
+     #             color = 'black') +
+     geom_abline(slope = 1, intercept = 0,
+                 linetype = 'dashed',
+                 color = '#E15759') +
+     lims(x = c(7, 48), y = c(7, 48)) +
+     labs(x = "Plant taxa\n(prior day menu)", 
+          y = 'pMR\n(stool sample)') +
+     coord_equal() 
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            '2',
+            paste0(plotID, '_pMR x menu richness.pdf')),
+       device = cairo_pdf,
+       height = 3, width = 3)
+```
+
+```{r}
+alpha.joint %>% 
+     select(-c(threshold, obs_rare)) %>% 
+     distinct() %>% 
+     cor.test(~ obs + obs_menu,
               data = .,
               method = 'spearman',
               alternative = 'greater')
 ```
 
-How about Sundays, Mondays only
+###### No weekends
 
 ```{r}
 alpha.joint %>% 
-     filter(weekday_menu %in% c('Saturday', 'Sunday')) %>%
-     ggplot(aes(x = obs_menu, y = obs_rare)) +
-     geom_point() +
-     lims(x = c(7, 46), y = c(7, 46)) +
-     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
-     coord_equal() +
-     theme_bw() +
-     theme(axis.title.y = ggtext::element_markdown())
-```
-
-
-```{r}
-alpha.joint %>% 
-     filter(weekday_menu %in% c('Saturday', 'Sunday')) %>%
-     cor.test(~ obs_rare + obs_menu, 
+     select(-c(threshold, obs_rare)) %>% 
+     distinct() %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>%
+     cor.test(~ obs + obs_menu, 
               data = .,
-              method = 'spearman')
+              method = 'spearman',
+              alternative = 'greater')
 ```
 
-How about in comparison to the day after today?
-
-```{r}
-alpha.next <- 
-     alpha %>% 
-     select(subj, date, obs_rare) %>% 
-     mutate(date_menu = date + 1) %>% 
-     left_join(alpha.menu) %>% 
-     select(subj,
-            starts_with('date'),
-            weekday_menu,
-            starts_with('obs'),
-            everything())
-
-alpha.next
-```
-
-```{r}
-ggplot(alpha.next, aes(x = obs_menu, y = obs_rare)) +
-     geom_point() +
-     lims(x = c(7, 46), y = c(7, 46)) +
-     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
-     coord_equal() +
-     theme_bw() +
-     theme(axis.title.y = ggtext::element_markdown())
-```
-```{r}
-cor.test(alpha.next$obs_rare,
-         alpha.next$obs_menu,
-         method = 'spearman',
-         alternative = 'greater')
-```
+###### Random day
 
 How about with a random day (within each subject)?
 
@@ -426,7 +455,8 @@ How about with a random day (within each subject)?
 # Make joint object
 alpha.rand <- 
      alpha %>%
-     select(subj, date, obs_rare)
+     select(subj, date, obs) %>% 
+     distinct()
 
 # Randomly choose a comparator day (within each subject)
 sample_subj <- function(s, n){
@@ -450,7 +480,8 @@ How about with a random day (any day)?
 alpha.rand <- 
      alpha %>%
      mutate(sample = paste(subj, date, sep = '_'))  %>% 
-     select(subj, sample, obs_rare)
+     select(subj, sample, obs) %>% 
+     distinct()
 
 dim(alpha.rand)
 ```
@@ -459,26 +490,144 @@ dim(alpha.rand)
 set.seed(1234)
 alpha.rand <- 
      bind_cols(alpha.rand, 
-               row = sample(alpha.menu$row, 32))
-
-alpha.rand <- 
-     alpha.rand %>% 
-     select(-subj) %>% 
-     left_join(alpha.menu)
+               obs_menu = sample(alpha.menu$obs_menu, 32))
 ```
 
 ```{r}
-ggplot(alpha.rand, aes(x = obs_menu, y = obs_rare)) +
+ggplot(alpha.rand, aes(x = obs_menu, y = obs)) +
      geom_point() +
      lims(x = c(7, 46), y = c(7, 46)) +
-     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
-     coord_equal() +
-     theme_bw() +
-     theme(axis.title.y = ggtext::element_markdown())
+     labs(x = 'Plant taxa (menu)', y = 'pMR') +
+     coord_equal()
 ```
 ```{r}
-cor.test(alpha.rand$obs_rare,
+cor.test(alpha.rand$obs,
          alpha.rand$obs_menu,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+###### Tomorrow
+
+```{r}
+alpha.next <- 
+     alpha %>% 
+     select(subj, date, obs) %>% 
+     distinct() %>% 
+     mutate(date_menu = date + 1) %>% 
+     left_join(alpha.menu) %>% 
+     select(subj,
+            starts_with('date'),
+            weekday_menu,
+            obs,
+            everything())
+
+alpha.next
+```
+
+```{r}
+ggplot(alpha.next, aes(x = obs_menu, y = obs)) +
+     geom_point() +
+     lims(x = c(7, 48), y = c(7, 48)) +
+     labs(x = 'Plant taxa (menu)', y = 'pMR') +
+     coord_equal()
+```
+```{r}
+cor.test(alpha.next$obs,
+         alpha.next$obs_menu,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+### Rarefied richness
+
+#### Correlation
+
+```{r}
+alpha.joint %>% 
+     filter(threshold == 1000) %>% 
+     cor.test(~obs_rare + obs_menu,
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+```{r}
+alpha.joint %>% 
+     filter(threshold == 1000) %>% 
+     ggplot(aes(x = obs_menu, y = obs_rare)) +
+     lims(x = c(7, 48), y = c(7, 48)) +
+     geom_abline(slope = 1, intercept = 0,
+                 linetype = 'dashed',
+                 color = '#E15759') +
+     geom_point(size = 2, alpha = 0.6) +
+     labs(x = 'Plant taxa\n(prior day menu)', 
+          y = 'pMR\n(stool sample)') +
+     coord_equal() 
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            '2',
+            paste0(plotID, '_rarefied pMR x menu richness.pdf')),
+       height = 3, width = 3,
+       device = cairo_pdf)
+```
+
+##### No weekends
+
+```{r}
+alpha.joint %>% 
+     filter(threshold == 1000) %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>%
+     cor.test(~ obs_rare + obs_menu, 
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+##### Random day
+
+##### Tomorrow
+
+```{r}
+alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>%
+     cor.test(~ obs + obs_menu, 
+              data = .,
+              method = 'spearman',
+              alternative = 'greater')
+```
+
+How about in comparison to the day after today?
+
+```{r}
+alpha.next <- 
+     alpha %>% 
+     select(subj, date, obs) %>% 
+     mutate(date_menu = date + 1) %>% 
+     left_join(alpha.menu) %>% 
+     select(subj,
+            starts_with('date'),
+            weekday_menu,
+            starts_with('obs'),
+            everything())
+
+alpha.next
+```
+
+```{r}
+ggplot(alpha.next, aes(x = obs_menu, y = obs)) +
+     geom_point() +
+     lims(x = c(7, 48), y = c(7, 48)) +
+     labs(x = 'Plant taxa (menu)', y = 'Plant taxa (*trnL*)') +
+     coord_equal()
+```
+```{r}
+cor.test(alpha.next$obs,
+         alpha.next$obs_menu,
          method = 'spearman',
          alternative = 'greater')
 ```
