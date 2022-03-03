@@ -92,10 +92,12 @@ fvs <-
 
 ```{r}
 # Filter to Adult-1 and -2 cohorts only
+# And only samples with > 0 reads
 ps <- 
      ps %>% 
      subset_samples(study %in% c('Adult-1', 'Adult-2')) %>% 
-     prune_taxa(taxa_sums(.) > 0, .)
+     subset_samples(reads_food != 0) %>% 
+     prune_taxa(taxa_sums(.) > 0, .) 
 
 ps
 ```
@@ -116,9 +118,11 @@ add <-
      rownames_to_column(var = 'row') %>% 
      select(row, study, subj, CH_week, ONR_day) 
 
-alpha <- 
-    left_join(alpha, add,
-              by = c('name' = 'row'))
+# The order of this join exclude samples with 0 counts
+alpha <-
+    left_join(add,
+              alpha,
+              by = c('row' = 'name'))
 ```
 
 Then below, can just filter by desired threshold in order to calculate measures.
@@ -143,7 +147,9 @@ alpha.mean <-
 # Join mean richness to PDI data
 fvs <- 
      alpha.mean %>% 
-     left_join(fvs)
+     left_join(select(fvs,
+                      study:kcal,
+                      matches('fvs')))
 ```
 
 ### Raw data
@@ -153,11 +159,13 @@ fvs <-
 fvs %>% 
      select(-c(threshold, mean_rare)) %>% 
      distinct() %>% 
-     ggplot(aes(x = fvs_tot, y = mean)) +
+     ggplot(aes(x = fvs_tot, y = mean, color = pass_qc)) +
      geom_point(size = 2, alpha = 0.8) +
      facet_wrap(~study) +
+     scale_color_manual(values = c('#e39802', '#309143', 'gray80')) +
      labs(x = 'FVS\n(all items)',
-          y = 'Mean pMR')
+          y = 'Mean pMR',
+          color = 'Pass QC?')
 ```
 
 ```{r}
@@ -173,6 +181,7 @@ ggsave(here('results',
 ```{r}
 fvs %>% 
      select(-c(threshold, mean_rare)) %>% 
+     filter(pass_qc) %>%
      distinct() %>% 
      group_by(study) %>% 
      summarize(rho = cor.test(~ fvs_tot + mean,
@@ -187,11 +196,13 @@ fvs %>%
 fvs %>% 
      select(-c(threshold, mean_rare)) %>% 
      distinct() %>% 
-     ggplot(aes(x = fvs_plant, y = mean)) +
+     ggplot(aes(x = fvs_plant, y = mean, color = pass_qc)) +
      geom_point(size = 2, alpha = 0.8) +
      facet_wrap(~study) +
+     scale_color_manual(values = c('#e39802', '#309143', 'gray80')) +
      labs(x = 'FVS\n(plant items)',
-          y = 'Mean pMR')
+          y = 'Mean pMR',
+          color = 'Pass QC?')
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
@@ -205,6 +216,7 @@ ggsave(here('results',
 ```{r}
 fvs %>% 
      select(-c(threshold, mean_rare)) %>% 
+     filter(pass_qc) %>% 
      distinct() %>% 
      group_by(study) %>% 
      summarize(rho = cor.test(~ fvs_plant + mean,
@@ -221,11 +233,13 @@ fvs %>%
 fvs %>% 
      select(-c(threshold, mean_rare)) %>% 
      distinct() %>% 
-     ggplot(aes(x = fvs_tot_residual, y = mean)) +
+     ggplot(aes(x = fvs_tot_residual, y = mean, color = pass_qc)) +
      geom_point(size = 2, alpha = 0.8) +
      facet_wrap(~study) +
+     scale_color_manual(values = c('#e39802', '#309143', 'gray80')) +
      labs(x = 'Food Variety Score residual\n(all items)',
-          y = 'Mean pMR')
+          y = 'Mean pMR',
+          color = 'Pass QC?')
 ```
 
 ```{r}
@@ -241,6 +255,7 @@ ggsave(here('results',
 ```{r}
 fvs %>% 
      select(-c(threshold, mean_rare)) %>% 
+     filter(pass_qc) %>% 
      distinct() %>% 
      group_by(study) %>% 
      summarize(rho = cor.test(~ fvs_tot_residual + mean,
@@ -256,10 +271,10 @@ fvs %>%
      select(-c(threshold, mean_rare)) %>% 
      distinct() %>% 
      ggplot(aes(x = fvs_plant_residual, y = mean)) +
-     geom_point(size = 2, alpha = 0.8) +
+     geom_point(size = 2, alpha = 0.6) +
      facet_wrap(~study,
                 nrow = 2) +
-     labs(x = 'FVS\n(plant items)',
+     labs(x = 'FVS score residual\n(plant items)',
           y = 'Mean pMR')
 ```
 ```{r}
@@ -275,6 +290,7 @@ ggsave(here('results',
 ```{r}
 fvs %>% 
      select(-c(threshold, mean_rare)) %>% 
+     filter(pass_qc) %>%
      distinct() %>% 
      group_by(study) %>% 
      summarize(rho = cor.test(~ fvs_plant_residual + mean,
@@ -284,11 +300,47 @@ fvs %>%
             
 ```
 
+```{r}
+# Raw data
+fvs %>% 
+     select(-c(threshold, mean_rare)) %>% 
+     distinct() %>% 
+     ggplot(aes(x = fvs_animal_residual, y = mean)) +
+     geom_point(size = 2, alpha = 0.6) +
+     facet_wrap(~study,
+                nrow = 2) +
+     labs(x = 'FVS score residual\n(animal items)',
+          y = 'Mean pMR')
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '3',
+            paste0(plotID, '_raw trnL richness x animal FVS.pdf')),
+       device = cairo_pdf,
+       height = 4, width = 2.5)
+```
+
+```{r}
+fvs %>% 
+     select(-c(threshold, mean_rare)) %>% 
+     filter(pass_qc) %>%
+     distinct() %>% 
+     group_by(study) %>% 
+     summarize(rho = cor.test(~ fvs_animal_residual + mean,
+                           method = 'spearman')$estimate,
+               p = cor.test(~ fvs_animal_residual + mean,
+                            method = 'spearman')$p.value) 
+            
+```
+
+
 ### Rarefied data
 
 ```{r}
 fvs %>% 
-     ggplot(aes(x = fvs_plant, y = mean_rare)) +
+     ggplot(aes(x = fvs_plant_residual, y = mean_rare)) +
      geom_point(size = 2, alpha = 0.8) +
      facet_grid(~study + threshold) +
      labs(x = 'Food Variety Score',
@@ -298,6 +350,7 @@ fvs %>%
 ```{r}
 fvs %>% 
      group_by(study, threshold) %>% 
+     filter(pass_qc) %>% 
      summarize(rho = cor.test(~ fvs_plant_residual + mean_rare,
                            method = 'spearman')$estimate,
                p = cor.test(~ fvs_plant_residual + mean_rare,
@@ -308,5 +361,15 @@ fvs %>%
 Interesting. Only significant at the lowest level of rarefaction.  Why is this?
 
 One could be we're tossing out samples.
-Another could be that small amounts shouldn't be contributing to our richness estimates.
-Would expect this to stabilize if I tried something like Shannon, which would minimize the contribution.  This might be a nice place to explore.
+Another could be that small amounts should be contributing to our richness estimates.
+
+```{r}
+fvs %>% 
+     group_by(study, threshold) %>% 
+     filter(pass_qc) %>% 
+     summarize(rho = cor.test(~ fvs_animal_residual + mean_rare,
+                           method = 'spearman')$estimate,
+               p = cor.test(~ fvs_animal_residual + mean_rare,
+                            method = 'spearman')$p.value) 
+            
+```
