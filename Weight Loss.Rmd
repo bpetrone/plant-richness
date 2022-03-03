@@ -32,7 +32,7 @@ theme_set(theme_bw() +
                                               face = 'bold'),
                     legend.title = element_text(size = 12,
                                               face = 'bold'),
-                    legend.text = element_text(size = 12)
+                    legend.text = element_text(size = 11)
                      )
 )
 ```
@@ -116,7 +116,7 @@ alpha
 # Add link to menu day at varying lag
 
 # Label each stool sample with a week of preceding days as SUBJ_DATE
-for (delta in 1:7){
+for (delta in 1:2){
      varname <- paste0('delta', delta)
      alpha <- mutate(alpha, 
                      !!varname := date - delta,)
@@ -271,28 +271,49 @@ Have two dataframes:
 
 First, might want to understand day-to-day variability in trnL richness compared to menu richness.
 
+```{r}
+# 1 day of lag
+lag <- 'delta1'
+
+# Make joint object
+alpha.joint <- 
+     alpha %>%
+     select(subj,
+            date,
+            date_menu = all_of(lag), 
+            starts_with('obs'),
+            threshold) %>% 
+     # mutate(delta = gsub('delta', '', lag)) %>% 
+     left_join(alpha.menu) %>% 
+     select(subj,
+            starts_with('date'),
+            weekday_menu,
+            starts_with('obs'),
+            everything())
+
+head(alpha.joint)
+```
+
 ### Raw richness
 
 #### Range 
 ```{r}
 # Pivot data to long form by method
-# Need to choose rarefied or raw data
-alpha.range <- 
-     alpha.joint %>% 
-     filter(!(weekday_menu %in% c('Saturday',
-                                  'Sunday'))) %>%
-     select(subj, date, obs, obs_menu) %>% 
-     distinct() %>% 
+alpha.range <-
+     alpha.joint %>%
+     # filter(!(weekday_menu %in% c('Saturday',
+     #                              'Sunday'))) %>%
+     select(subj, date, obs, obs_menu) %>%
+     distinct() %>%
      pivot_longer(cols = -c(subj, date),
                   names_to = 'measure',
-                  values_to = 'richness') %>% 
+                  values_to = 'richness') %>%
      mutate(measure = ifelse(measure == 'obs',
                              yes = 'Metabarcoding',
                              no = 'Menu'))
 
 alpha.range
 ```
-
 ```{r}
 # Factor subjects
 alpha.range$subj <- 
@@ -310,15 +331,16 @@ ggplot(alpha.range,
            group = measure)) +
      geom_point(
           alpha = 0.8,
-          size = 2,
-          position = position_jitterdodge(jitter.width = 0.2,
-                                          dodge.width = 0.8
+          size = 1.5,
+          position = position_jitterdodge(jitter.width = 0.15,
+                                          dodge.width = 0.6,
+                                          seed = 222
           )) +
      scale_color_manual(values = c('gray40', '#8ace7e')) +
      labs(x = 'Participant', 
           y = 'Plant richness', 
           color = 'Measure') +
-     scale_y_continuous(limits = c(0, 59)) +
+     scale_y_continuous(limits = c(0, 57)) +
      theme(
           panel.grid.major.x = element_blank(),
           panel.grid.minor.y = element_blank(),
@@ -332,7 +354,8 @@ ggsave(here('results',
             'manuscript', 
             'supplemental',
             'weight loss',
-            paste0(plotID, '_raw pMR x menu richness (all days).pdf')),
+            paste0(plotID, '_raw pMR x menu richness (weekdays).pdf')),
+       device = cairo_pdf,
        height = 3, width = 4)
 ```
 
@@ -373,28 +396,7 @@ TukeyHSD(anova)
 
 #### Correlation
 
-```{r}
-# 1 day of lag
-lag <- 'delta1'
-
-# Make joint object
-alpha.joint <- 
-     alpha %>%
-     select(subj,
-            date,
-            date_menu = all_of(lag), 
-            starts_with('obs'),
-            threshold) %>% 
-     # mutate(delta = gsub('delta', '', lag)) %>% 
-     left_join(alpha.menu) %>% 
-     select(subj,
-            starts_with('date'),
-            weekday_menu,
-            starts_with('obs'),
-            everything())
-
-head(alpha.joint)
-```
+##### 1 day of lag
 
 ```{r}
 alpha.joint %>% 
@@ -402,14 +404,11 @@ alpha.joint %>%
      distinct() %>% 
      ggplot(aes(x = obs_menu, y = obs)) +
      geom_point(size = 2, alpha = 0.6) +
-     # geom_abline(slope = 1, intercept = 0,
-     #             linetype = 'dashed',
-     #             color = 'black') +
      geom_abline(slope = 1, intercept = 0,
                  linetype = 'dashed',
                  color = '#E15759') +
-     lims(x = c(7, 48), y = c(7, 48)) +
-     labs(x = "Plant taxa\n(prior day menu)", 
+     lims(x = c(7, 50), y = c(7, 50)) +
+     labs(x = "Plant taxa\n(yesterday's menu)", 
           y = 'pMR\n(stool sample)') +
      coord_equal() 
 ```
@@ -434,6 +433,45 @@ alpha.joint %>%
               alternative = 'greater')
 ```
 
+###### Average error
+
+
+Don't think this is best with a model because it's actually not a 1:1 fit (e.g. the slope tells us pMR is a slight overestimate).  Maybe best to just calculate raw differences?
+
+```{r}
+alpha.joint %>% 
+     select(-c(threshold, obs_rare)) %>% 
+     distinct() %>% 
+     mutate(diff = obs - obs_menu) %>% 
+     pull(diff) %>% 
+     # abs() %>% 
+     mean()
+```
+
+```{r}
+mod <- 
+     alpha.joint %>% 
+     select(-c(threshold, obs_rare)) %>% 
+     distinct() %>% 
+     lm(obs ~ 0 + obs_menu, 
+        data = .)
+
+summary(mod)
+```
+
+```{r}
+# Get residuals
+mod$residuals
+```
+
+```{r}
+mean(mod$residuals)
+```
+
+```{r}
+mean(abs(mod$residuals))
+```
+
 ###### No weekends
 
 ```{r}
@@ -447,9 +485,7 @@ alpha.joint %>%
               alternative = 'greater')
 ```
 
-###### Random day
-
-How about with a random day (within each subject)?
+##### Random day
 
 ```{r}
 # Make joint object
@@ -457,21 +493,6 @@ alpha.rand <-
      alpha %>%
      select(subj, date, obs) %>% 
      distinct()
-
-# Randomly choose a comparator day (within each subject)
-sample_subj <- function(s, n){
-     alpha.menu %>% 
-          filter(subj == s) %>% 
-          pull(row) %>% 
-          sample(size = n, replace = FALSE)
-}
-```
-
-```{r}
-# How many entries per subject do we need?
-alpha.rand %>% 
-     group_by(subj) %>% 
-     count()
 ```
 
 How about with a random day (any day)?
@@ -495,11 +516,22 @@ alpha.rand <-
 
 ```{r}
 ggplot(alpha.rand, aes(x = obs_menu, y = obs)) +
-     geom_point() +
-     lims(x = c(7, 46), y = c(7, 46)) +
-     labs(x = 'Plant taxa (menu)', y = 'pMR') +
+     geom_point(size = 2, alpha = 0.6) +
+     lims(x = c(7, 50), y = c(7, 50)) +
+     labs(x = 'Plant taxa\n(random menu)', y = 'pMR') +
      coord_equal()
 ```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            '2',
+            paste0(plotID, '_pMR x menu richness (random day).pdf')),
+       device = cairo_pdf,
+       height = 3, width = 3)
+```
+
 ```{r}
 cor.test(alpha.rand$obs,
          alpha.rand$obs_menu,
@@ -507,7 +539,7 @@ cor.test(alpha.rand$obs,
          alternative = 'greater')
 ```
 
-###### Tomorrow
+##### Tomorrow
 
 ```{r}
 alpha.next <- 
@@ -527,11 +559,21 @@ alpha.next
 
 ```{r}
 ggplot(alpha.next, aes(x = obs_menu, y = obs)) +
-     geom_point() +
-     lims(x = c(7, 48), y = c(7, 48)) +
-     labs(x = 'Plant taxa (menu)', y = 'pMR') +
+     geom_point(size = 2, alpha = 0.6) +
+     lims(x = c(7, 50), y = c(7, 50)) +
+     labs(x = "Plant taxa\n(tomorrow's menu)", y = 'pMR') +
      coord_equal()
 ```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            '2',
+            paste0(plotID, '_pMR x menu richness (tomorrow).pdf')),
+       device = cairo_pdf,
+       height = 3, width = 3)
+```
+
 ```{r}
 cor.test(alpha.next$obs,
          alpha.next$obs_menu,
@@ -541,15 +583,102 @@ cor.test(alpha.next$obs,
 
 ### Rarefied richness
 
+#### Range
+
+```{r}
+# Pivot data to long form by method
+# Need to choose rarefied or raw data
+alpha.range <- 
+     alpha.joint %>% 
+     filter(!(weekday_menu %in% c('Saturday',
+                                  'Sunday'))) %>%
+     filter(threshold == 1000) %>% 
+     select(subj, date, obs_rare, obs_menu) %>% 
+     pivot_longer(cols = -c(subj, date),
+                  names_to = 'measure',
+                  values_to = 'richness') %>% 
+     mutate(measure = ifelse(measure == 'obs_rare',
+                             yes = 'Metabarcoding',
+                             no = 'Menu'))
+
+alpha.range
+```
+
+```{r}
+# Factor subjects
+alpha.range$subj <- 
+     factor(alpha.range$subj,
+            levels = c('JN55', 'AK65', 'PC74', 'ML48'),
+            labels = 1:4)
+```
+
+```{r}
+# Note this is already filtered above to exclude weekdays
+ggplot(alpha.range,
+       aes(x = subj, 
+           y = richness,
+           color = measure,
+           group = measure)) +
+     geom_point(
+          alpha = 0.8,
+          size = 1.5,
+          position = position_jitterdodge(jitter.width = 0.15,
+                                          dodge.width = 0.6,
+                                          seed = 222
+          )) +
+     scale_color_manual(values = c('gray40', '#8ace7e')) +
+     labs(x = 'Participant', 
+          y = 'Plant richness', 
+          color = 'Measure') +
+     scale_y_continuous(limits = c(0, 57)) +
+     theme(
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.major.y = element_line(linetype = 'dashed'),
+          legend.position = 'top')
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'weight loss',
+            paste0(plotID, '_raw pMR x menu richness (weekdays).pdf')),
+       device = cairo_pdf,
+       height = 3, width = 4)
+```
+
+```{r}
+anova <- aov(richness ~ subj * measure, 
+             data = alpha.range)
+```
+
+```{r}
+# Post-hoc tests on measure
+TukeyHSD(anova)
+```
+
 #### Correlation
 
 ```{r}
 alpha.joint %>% 
-     filter(threshold == 1000) %>% 
+     filter(threshold == 1000) %>%
      cor.test(~obs_rare + obs_menu,
               data = .,
               method = 'spearman',
               alternative = 'greater')
+```
+
+```{r}
+alpha.joint %>% 
+     group_by(threshold) %>% 
+     summarize(rho = cor.test(~obs_rare + obs_menu,
+                              method = 'spearman',
+                              alternative = 'greater')$estimate,
+               p = cor.test(~obs_rare + obs_menu,
+                              method = 'spearman',
+                              alternative = 'greater')$p.value)
 ```
 
 ```{r}
