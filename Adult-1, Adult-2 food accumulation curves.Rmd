@@ -1,0 +1,492 @@
+---
+title: "Adult 1, Adult-2 food accumulation curves"
+output: html_notebook
+---
+
+See what unique foods accumulate over consecutive daily samples.
+From Ruel: "An interesting analysis by Drewnowski and colleagues measured cumulative dietary variety (based on individual foods) in American adults over a period of 15 d (9). The individual curves show that, as expected, the number of different foods consumed increases with time and eventually plateaus at a point that defines a person’s entire "food repertoire" over this period."
+
+```{r}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold'),
+                    legend.title = element_text(size = 12,
+                                                face = 'bold'),
+                    legend.text = element_text(size = 11))
+)
+```
+
+# Setup
+
+```{r setup, include = FALSE, echo = FALSE}
+require(knitr)
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r}
+library(here)
+library(phyloseq)
+library(tidyverse)
+```
+
+# Read in data
+
+```{r}
+# Full trnL phyloseq object
+ps <- 
+     here('data', 
+          'processed', 
+          'phyloseq',
+          'trnL_combined_ps.rds') %>% 
+     readRDS()
+
+ps
+```
+
+```{r}
+# Rarefied counts
+alpha <- 
+     here('data', 
+          'processed', 
+          'rarefaction',
+          'Rarefied trnL counts.rds') %>% 
+     readRDS()
+
+dim(alpha)
+```
+
+# Pre-process
+
+```{r}
+# Subset to Adult-1, Adult-2 samples
+ps <- 
+     ps %>% 
+     subset_samples(study %in% c('Adult-1', 'Adult-2')) %>% 
+     subset_samples(reads_food > 0) %>% 
+     prune_taxa(taxa_sums(.) > 0 , .)
+
+ps
+```
+
+```{r}
+# Melt
+melt <- psmelt(ps)
+```
+
+```{r}
+# Simplify sample data
+melt <- 
+     select(melt,
+            OTU:CH_weekday, ONR_day,
+            superkingdom:name)
+```
+
+```{r}
+# Sequence samples
+# Adult-1: 
+melt <- 
+     melt %>% 
+     # Create combination week-weekday label
+     mutate(CH_day = paste(melt$CH_week, melt$CH_weekday)) %>% 
+     # Recode NA
+     mutate(CH_day = ifelse(CH_day == 'NA NA',
+                            yes = NA,
+                            no = CH_day))
+
+unique(melt$CH_day) %>% sort()
+```
+
+```{r}
+unique(melt$ONR_day)
+```
+
+```{r}
+# Collapse this ordering into a single variable, so it can be iterated over below
+melt <- 
+     melt %>% 
+     unite('study_day', c(CH_day, ONR_day), na.rm = TRUE) %>% 
+     # Simplify columns
+     select(Sample, 
+            Abundance,
+            study,
+            subj, 
+            study_day,
+            superkingdom:name)
+```
+
+```{r}
+# Make a factor to structure ordering
+melt$study_day <- factor(melt$study_day,
+                      levels = c(
+                           # Adult-1 levels
+                           '1 Wednesday', 
+                           '1 Thursday', 
+                           '1 Friday', 
+                           '2 Wednesday', 
+                           '2 Thursday', 
+                           '2 Friday', 
+                           '3 Wednesday', 
+                           '3 Thursday', 
+                           '3 Friday', 
+                           '4 Wednesday', 
+                           '4 Thursday', 
+                           '4 Friday', 
+                           '5 Wednesday', 
+                           '5 Thursday', 
+                           '5 Friday', 
+                           '6 Wednesday', 
+                           '6 Thursday', 
+                           '6 Friday',
+                           '6 Saturday',
+                           # Adult-2 levels
+                           '2', # T1
+                           '5', # F1
+                           '9', # T2
+                           '12', # F2
+                           '16', # T3
+                           '19')) # F3
+```
+
+## Richness
+
+```{r}
+# Filter and simplify rarefied richness
+alpha <- 
+     alpha %>% 
+     filter(grepl(name,
+                  pattern = 'CHOMP|ONR') & reads_food > 0)
+```
+
+```{r}
+# Add full obs, not just those passing filter
+asvtab <- ps@otu_table@.Data
+add <- apply(asvtab, 1, function(x){sum(x > 0)})
+
+add <- 
+     data.frame(obs = add) %>% 
+     rownames_to_column(var = 'name')
+     
+# Populate with sample data
+add <- 
+     ps@sam_data %>%
+     data.frame() %>% 
+     rownames_to_column(var = 'row') %>% 
+     select(row, study, subj, CH_week, ONR_day) %>% 
+     right_join(add, by = c('row' = 'name')) %>% 
+     rename(name = row)
+
+alpha <- 
+     full_join(alpha,
+               add)
+
+rm(add)
+```
+
+# Analyze
+
+## Calculate food accumulation
+
+```{r}
+# Make dataframe for storing results
+results.df <- 
+     data.frame(
+          study = NULL,
+          subj = NULL,
+          sample_n = NULL,
+          detected_so_far = NULL
+     )
+```
+
+```{r}
+# Check if any study day is NA
+sum(is.na(melt$study_day))
+```
+
+```{r}
+# Iterate over each subject
+for (s in unique(melt$subj)){
+     
+     # Filter to only that subject's samples, and taxa > 0
+     melt.s <- 
+          filter(melt, subj == s & Abundance > 0)
+     
+     # Get number of samples
+     n <- n_distinct(melt.s$study_day)
+     n
+     
+     # Arrange in order
+     melt.s <- arrange(melt.s, study_day)
+
+     # Get study day of each
+     days <- unique(melt.s$study_day)
+     
+     # Initial entries
+     detected_names = NULL # No plants detected yet 
+     
+     # Add origin to data
+     row <- 
+          data.frame(study = unique(melt.s$study),
+                     subj = unique(melt.s$subj),
+                     sample_n = 0,
+                     detected_so_far = 0) 
+     
+     # Append to results
+     results.df <- bind_rows(results.df,
+                             row)
+
+     # Then, iterate over each one of that subject's samples in order, counting
+     # cumulative trnL taxa as we go
+     for (i in seq(n)){
+          current <- 
+               filter(melt.s, 
+                      study_day == days[i]) %>% 
+               pull(name) %>% 
+               sort()
+          
+          current <- union(detected_names, current)
+          
+          row <- 
+               data.frame(study = unique(melt.s$study),
+                          subj = unique(melt.s$subj),
+                          sample_n = i,
+                          detected_so_far = length(current)) 
+          
+          # Append to results
+          results.df <- bind_rows(results.df,
+                                  row)
+          
+          # Update taxa detected so far
+          detected_names <- current
+     }
+     
+}
+```
+
+```{r}
+# Do dimensions check out?
+# We have number of unique subj-sample pairs, plus each subject again (0 row)
+
+melt %>% 
+     group_by(subj, study_day) %>% 
+     count() %>% 
+     dim()
+
+n_distinct(melt$subj)
+```
+
+```{r}
+# 423 + 58 # Rarefied data
+566 + 60 # All data
+dim(results.df)
+```
+
+## Plot
+
+```{r}
+ggplot(results.df, aes(x = sample_n, y = detected_so_far, group = subj)) +
+     geom_line(alpha = 0.5) +
+     labs(x = 'Number of samples', y = 'Cumulative pMR')
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+         'manuscript',
+         'supplemental',
+         paste0(plotID,
+                '_Adult-1, Adult-2 taxon accumulation curves, all data.pdf')),
+       height = 4,
+       width = 5)
+```
+
+How does this correlate with mean number of observations?
+
+```{r}
+# Get the cumulative amount for each subject-study day pairing
+endpoint <- 
+     results.df %>% 
+     group_by(subj) %>% 
+     arrange(sample_n) %>% 
+     summarize(obs_cumulative = last(detected_so_far))
+```
+
+```{r}
+# Save accumulation data for subsequent use
+# write_csv(
+#      results.df,
+#      here(
+#           'data', 
+#           'processed',
+#           'accumulation',
+#           'Adult-1 and Adult-2 cumulative taxon counts.csv'
+#      )
+# )
+```
+
+```{r}
+# Average taxon counts within each participant
+alpha.mean <- 
+     alpha %>% 
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     group_by(subj) %>% 
+     summarize(obs_mean = mean(obs),
+               obs_rare_mean = mean(obs_rare, na.rm = TRUE))
+```
+
+```{r}
+# Join the two together
+endpoint <- full_join(endpoint, alpha.mean)
+```
+
+```{r}
+ggplot(endpoint, aes(x = obs_mean, y = obs_cumulative)) +
+     geom_point(size = 2, alpha = 0.6) +
+     xlim(0, 70) + ylim(0, 70) +
+     coord_equal() +
+     labs(x = 'Mean pMR', y = 'Cumulative pMR') 
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+         'manuscript',
+         'supplemental',
+         paste0(plotID,
+                '_Adult-1, Adult-2 cumulative taxa vs mean taxa.pdf')),
+       device = cairo_pdf,
+       height = 4,
+       width = 4)
+```
+
+```{r}
+# Calculate correlation
+cor.test(endpoint$obs_cumulative, endpoint$obs_mean,
+         method = 'spearman',
+         alternative = 'greater')
+```
+
+## Fit curves
+
+Species accumulation curves modeled with either an exponential or linear function. 
+
+```{r}
+# Make a numeric subject ID by cohort (1...n_1 in Adult 1, and 1...n_2 in Adult-2).
+results.df <- 
+     arrange(results.df, study, subj)
+
+results.df <- 
+     results.df %>% 
+     group_by(study) %>% 
+     mutate(subj_numeric = factor(subj, 
+                                  labels = 1:n_distinct(subj))) %>% 
+     ungroup()
+```
+
+
+```{r}
+# Make overview plot of fits (Adult-1)
+results.df %>% 
+     filter(sample_n > 0) %>% # Remove intercept (for log below)
+     filter(study == 'Adult-1') %>% 
+     ggplot(aes(x = sample_n, y = detected_so_far)) +
+     geom_point(size = 2, alpha = 0.6) +
+     geom_smooth(aes(color = study),
+                 method = 'lm', 
+                 formula = y ~ log(x)) +
+     facet_wrap(~ subj_numeric, 
+                nrow = 7, ncol = 4) +
+     ylim(0, 70) + xlim(0,18) +
+     labs(y = 'Cumulative pMR', 
+          x = 'Stool samples (*n*)') +
+     theme(legend.position = 'none',
+           strip.text = element_blank(),
+           axis.title.x = ggtext::element_markdown())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+         'manuscript',
+         'supplemental',
+         paste0(plotID,
+                '_Adult-1 taxon accumulation curves.pdf')),
+       device = cairo_pdf, 
+       height = 10,
+       width = 5)
+```
+
+```{r}
+# Make overview plot of fits (Adult-2)
+results.df %>% 
+     filter(sample_n > 0) %>% # Remove intercept (for log below)
+     filter(study == 'Adult-2') %>% 
+     ggplot(aes(x = sample_n, y = detected_so_far)) +
+     geom_point(size = 2, alpha = 0.6) +
+     geom_smooth(aes(color = study),
+                 method = 'lm', 
+                 formula = y ~ log(x)) +
+     facet_wrap(~ subj_numeric, 
+                nrow = 8, ncol = 4) +
+     ylim(0, 70) + xlim(0,18) +
+     labs(y = 'Cumulative pMR', 
+          x = 'Stool samples (*n*)') +
+     theme(legend.position = 'none',
+           axis.title.x = ggtext::element_markdown(),
+           strip.text = element_blank())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+         'manuscript',
+         'supplemental',
+         paste0(plotID,
+                '_Adult-2 taxon accumulation curves.pdf')),
+       device = cairo_pdf, 
+       height = 10,
+       width = 5)
+```
+
+```{r}
+# Make dataframe for holding results
+fits.df <- 
+     data.frame(
+          study = NULL,
+          subj = NULL,
+          intercept = NULL,
+          intercept_p = NULL,
+          beta = NULL,
+          beta_p = NULL,
+          r_squared = NULL
+     )
+
+# Add columns for predicted values: samples 1:20?
+```
+
+```{r}
+subjects <- unique(results.df$subj)
+for (s in subjects){
+# Remove intercept from data
+data <- 
+     filter(results.df, subj == 'FLU18') %>% 
+     filter(sample_n != 0)
+}
+```
+
+
+```{r}
+fit <- lm(detected_so_far ~ log(sample_n), 
+         data)
+
+summary(fit)
+```
+
+```{r}
+predict(fit, newdata = data.frame(sample_n = 1:20))
+```
+
