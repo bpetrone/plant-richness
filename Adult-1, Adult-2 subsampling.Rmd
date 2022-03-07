@@ -90,6 +90,7 @@ ffq <-
 ps <- 
      ps %>% 
      subset_samples(study %in% c('Adult-1', 'Adult-2')) %>% 
+     subset_samples(reads_food > 0) %>%
      prune_taxa(taxa_sums(.) > 0, .)
 
 ps
@@ -112,8 +113,9 @@ add <-
      select(row, study, subj, CH_week, ONR_day) 
 
 alpha <- 
-    left_join(alpha, add,
-              by = c('name' = 'row'))
+    left_join(add,
+              alpha,
+              by = c('row' = 'name'))
 
 alpha
 ```
@@ -123,6 +125,7 @@ Prune to just those that will be tested below.
 ```{r}
 ffq <- 
      ffq %>% 
+     filter(pass_qc) %>% 
      select(study, 
             subj,
             hei_plant_all,
@@ -184,12 +187,12 @@ for (iter in (1:100)){
           alpha.1 %>% 
           group_by(subj) %>% 
           slice_sample(n = 1) %>% 
-          pull(name)
+          pull(row)
      
      # Join to FVS
      alpha.temp <- 
           alpha.1 %>% 
-          filter(name %in% samples) %>% 
+          filter(row %in% samples) %>% 
           left_join(ffq, by = 'subj')
      
      # Calculate correlation:
@@ -313,7 +316,7 @@ for (iter in (1:100)){
           # Pull observed values, calculate mean, join to FFQ
           alpha.temp <- 
                alpha.1 %>% 
-               filter(name %in% c(s1, s2)) %>% 
+               filter(row %in% c(s1, s2)) %>% 
                group_by(subj) %>% 
                summarize(mean_obs = mean(obs)) %>% 
                left_join(ffq, by = c('subj'))
@@ -419,7 +422,7 @@ for (iter in (1:100)){
           # Pull observed values, calculate mean, join to FVS
           alpha.temp <- 
                alpha.1 %>% 
-               filter(name %in% c(s1, s2)) %>% 
+               filter(row %in% c(s1, s2)) %>% 
                group_by(subj) %>% 
                summarize(mean_obs = mean(obs)) %>% 
                left_join(ffq, by = c('subj'))
@@ -515,12 +518,12 @@ for (i in 3:6){ # Number of samples (only from separate weeks)
                filter(CH_week >= CH_week_start & 
                            CH_week < CH_week_start + i) %>% 
                # Pull sample names
-               pull(name)
+               pull(row)
           
           # Pull observed values, calculate mean, join to FVS
           alpha.temp <- 
                alpha.1 %>% 
-               filter(name %in% samples) %>% 
+               filter(row %in% samples) %>% 
                group_by(subj) %>% 
                summarize(mean_obs = mean(obs)) %>% 
                left_join(ffq, by = c('subj'))
@@ -617,12 +620,12 @@ for (iter in (1:100)){
           alpha.2 %>% 
           group_by(subj) %>% 
           slice_sample(n = 1) %>% 
-          pull(name)
+          pull(row)
      
      # Join to FVS
      alpha.temp <- 
           alpha.2 %>% 
-          filter(name %in% samples) %>% 
+          filter(row %in% samples) %>% 
           left_join(ffq, by = 'subj')
      
      # Calculate correlation:
@@ -730,7 +733,7 @@ for (iter in (1:100)){
           # Pull observed values, calculate mean, join to FVS
           alpha.temp <- 
                alpha.2 %>% 
-               filter(name %in% c(s1, s2)) %>% 
+               filter(row %in% c(s1, s2)) %>% 
                group_by(subj) %>% 
                summarize(mean_obs = mean(obs)) %>% 
                left_join(ffq, by = c('subj'))
@@ -806,7 +809,7 @@ for (iter in (1:100)){
      # Pull observed values, calculate mean, join to FVS
      alpha.temp <- 
           alpha.2 %>% 
-          filter(name %in% samples) %>% 
+          filter(row %in% samples) %>% 
           group_by(subj) %>% 
           summarize(mean_obs = mean(obs)) %>% 
           left_join(ffq, by = c('subj'))
@@ -884,6 +887,41 @@ results.df <-
             ~ as.numeric(.x)))
 ```
 
+### 80% or more
+
+What fraction of random shuffles were p<0.05?
+
+```{r}
+signif <- 
+     results.df %>% 
+     group_by(study, index, scheme) %>% 
+     summarize(significant = sum(p <= 0.05),
+               total = length(p)) %>% 
+     mutate(percentage = significant/total) %>% 
+     # Recode percentage as 50-80%, or >80%
+     mutate(percentage_cat = 
+                 cut(percentage,
+                     breaks = c(0, .5, .8, 1.1),
+                     right = FALSE))
+
+signif
+```
+
+```{r}
+# Recode categorical percentages
+signif <- 
+     signif %>% 
+     select(study, index, scheme, percentage = percentage_cat) %>% 
+     ungroup() %>% 
+     mutate(percentage = factor(percentage,
+                                labels = 
+                                     c('<50%',
+                                       '50-80%',
+                                       '>=80%')))
+```
+
+### Set intercept
+
 ```{r}
 # Intercept: get from full dataset
 alpha <- 
@@ -931,19 +969,23 @@ rho.df <-
           index = c(rep('HEI plant', 2),
                     rep('hPDI', 2),
                     rep('FVS plant', 2)),
-          rho_full = c(0.4679278, # Adult-1 HEI plant
-                       0.3130806, # Adult-2 HEI plant
-                       0.5300824, # Adult-1 hPDI
-                       0.4227946, # Adult-2 hPDI
-                       0.5214177, # Adult-1 FVS
-                       0.5177104) # Adult-2 FVS
+          rho_full = c(0.4173962, # Adult-1 HEI plant
+                       0.3992474, # Adult-2 HEI plant
+                       0.5232039, # Adult-1 hPDI
+                       0.6336815, # Adult-2 hPDI
+                       0.6156453, # Adult-1 FVS
+                       0.5022239) # Adult-2 FVS
      )
 rho.df
 ```
 ```{r}
 # Join to results
 results.df <- 
-     left_join(results.df, rho.df)
+     results.df %>% 
+     left_join(rho.df) %>% 
+     left_join(signif)
+
+rm(rho.df, signif)
 ```
 
 ```{r}
@@ -953,9 +995,9 @@ results.df$index <-
             levels = c('FVS plant',
                        'hPDI',
                        'HEI plant'),
-            labels = c('FVS (plant)',
+            labels = c('FVS score residuals\n(plant items)',
                        'hPDI',
-                       'HEI (plant)'))
+                       'HEI-2015\n(plant component)'))
 ```
 
 ```{r}
@@ -973,21 +1015,24 @@ schemes <-
 ```{r}
 # Plot
 ggplot(results.df, aes(x = scheme, y = rho, group = scheme)) +
-     geom_hline(yintercept = 0,
+     geom_hline(aes(yintercept = rho_full),
                 linetype = 'dotted',
                 color = 'gray',
                 size = 1) +
-     geom_hline(aes(yintercept = rho_full),
-                linetype = 'dotted',
-                color = '#8CD17D',
-                size = 1) +
-     geom_boxplot() +
+     geom_boxplot(aes(fill = percentage)) +
+     scale_fill_manual(values = c('#ff684c',
+                                  '#ffda66',
+                                  '#8ace7e')) +
      facet_grid(cols = vars(index),
                 rows = vars(study)) +
      scale_x_continuous(breaks = 1:7,
                         labels = schemes) +
-     labs(y = 'Spearman *rho*', x = 'Sampling scheme') +
+     labs(y = 'Spearman *rho*', 
+          x = 'Sampling scheme',
+          fill = '*p* values\n<0.05') +
      theme(axis.title.y = ggtext::element_markdown(),
+           legend.title = ggtext::element_markdown(),
+           strip.text = element_text(size = 12, face = 'bold'), 
            axis.text.x = element_text(angle = 40, 
                                       hjust = 1,
                                       size = 9),
@@ -1033,23 +1078,26 @@ ggsave(here('results',
        height = 5, width = 8)
 ```
 
-Alternative visualization
+Also, for n=2 and n=3, I'd like to say, 95% of shuffles had Spearman's rho > [X]. Can you please tell me what that [X] is?
 
 ```{r}
 results.df %>% 
-     mutate(scheme = factor(scheme)) %>% 
-     ggplot(aes(x = p, y = rho, color = scheme)) +
-     geom_point(alpha = 0.2) +
-     facet_grid(rows = vars(study),
-                cols = vars(index))
+     filter(study == 'Adult-2' & index == 'FVS residuals (plant)') %>% 
+     filter(scheme != 1) %>% 
+     select(-c(index, rho_full)) %>% 
+     # filter(p < 0.05) %>% 
+     group_by(scheme) %>% 
+     arrange(desc(rho)) %>% 
+     slice_head(prop = 0.95) %>%  
+     slice_tail(n = 1)
 ```
 
 ```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 
-            'manuscript',
-            '4',
-            paste0(plotID, '_Visualizing rho and p together.pdf')),
-       height = 5, width = 6)
+results.df %>% 
+     filter(study == 'Adult-2' & index == 'FVS residuals (plant)') %>% 
+     select(-c(index, rho_full)) %>% 
+     ggplot(aes(x = rho)) +
+     geom_histogram() +
+     facet_wrap(~scheme)
 ```
 
