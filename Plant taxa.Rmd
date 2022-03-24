@@ -145,44 +145,6 @@ metadata %>%
      group_by(use_food) %>% 
      count()
 ```
-```{r}
-# Tip labels are already encoded in the variable 'species_name_'
-# Add major/minor crop data
-# First, format compatibly with tip labels
-fao.names <- 
-     fao.names %>% 
-     # Remove infraspecific labels
-     mutate(tip = gsub(pattern = 'var.*',
-                       replacement = '', 
-                       Species),
-            tip = gsub(pattern = 'subsp.*',
-                       replacement = '', 
-                       tip),
-            # Replace space with underscore
-            tip = gsub(tip, 
-                       pattern = ' ',
-                       replacement = '_')) 
-```
-
-```{r}
-# Join to metadata
-metadata <- 
-     left_join(metadata, fao.names,
-               by = c('species_name_' = 'tip'))
-```
-
-```{r}
-# Make a simplified version of this for major crop tally in visualization:
-major.crop <- 
-     metadata %>% 
-     select(species_name_, # Tip labels in tree
-            Species) %>%  # From FAO labeling
-     distinct() %>% 
-     mutate(major_crop = ifelse(!is.na(Species),
-                                yes = TRUE,
-                                no = FALSE))
-```
-
 ### PhyloFood
 
 ```{r}
@@ -207,6 +169,7 @@ head(crops)
 tree <- keep.tip(tree, crops)
 
 tree
+rm(crops)
 ```
 
 ### Reference
@@ -336,69 +299,113 @@ any(is.na(db.df$species))
 
 ### Integrate
 
-How many names are present in tree labels? 592 in reference:
+#### Major crops in reference
 
-```{r}
-taxa.ref <- 
-     db.df %>% 
-     pull(name) %>% 
-     unique()
-
-taxa.tree <- 
-     tree$tip.label %>% 
-     gsub(pattern = '_', replacement = ' ')
-
-head(taxa.ref)
-head(taxa.tree)
-```
-
-Interesting-- note that every entry appears to be at the species level.  Don't worry about extending for now; instead, drop subspecies and variety info.
-
-```{r}
-taxa.ref <- 
-     taxa.ref %>% 
-     gsub(pattern = ' var\\. .*$', replacement = '') %>% 
-     gsub(pattern = ' subsp\\. .*$', replacement = '')
-
-sum(taxa.ref %in% taxa.tree)/length(taxa.ref)
-```
-
-```{r}
-taxa.ref[!(taxa.ref %in% taxa.tree)] %>% head(20)
-```
-
-```{r}
-taxa.tree[!(taxa.tree %in% taxa.ref)] %>% head(20)
-```
-
-#### Taxonstand
-
-Try synchronizing names to see how this impacts result.
-
-```{r}
-# Getting error here-- need to follow up
-# taxonstand <- Taxonstand::TPL(db.df$name)
-```
-
-## Add major/minor crop label
+#### Add major/minor crop label
 
 Interestingly, from Milla et al. 2021 methods: "Before matching, the FAO Commodity List was checked for taxonomic accuracy and validity against The Plant List using function TPL of the Taxonstand package in R v.3.6.2. Commodity groups composed of a single crop species were automatically matched but most groups included several taxa. However, all groups but wheat were composed of a major contributor to agricultural production, together with congeneric minor crops. Therefore, production data were assigned to the major crop of each multispecific group. For wheat, we assigned 93% of production to bread wheat and 7% to durum. *The 112 crop species with a tracked record in FAOSTAT* were operationally coded as major crops and the remaining 754 crop species that were included in the Crop Origins database, but which lacked a FAOSTAT record, were considered as minor crops."
 
-However, more than 112 listed:
 ```{r}
-dim(fao.names)
-n_distinct(fao.names$Species)
+# Tip labels are already encoded in the variable 'species_name_'
+# Add major/minor crop data
+# First, format compatibly with tip labels
+fao.names <- 
+     fao.names %>% 
+     # Remove infraspecific labels
+     mutate(tip = gsub(pattern = 'var.*',
+                       replacement = '', 
+                       Species),
+            tip = gsub(pattern = 'subsp.*',
+                       replacement = '', 
+                       tip),
+            # Replace space with underscore
+            tip = gsub(tip, 
+                       pattern = ' ',
+                       replacement = '_')) 
 ```
 
-Do only 112 turn up in PhyloFood taxa?
-
 ```{r}
-intersect(tree$tip.label,
-          fao.names$tip) %>% 
-     length()
+# Join to metadata
+metadata <- 
+     left_join(metadata, fao.names,
+               by = c('species_name_' = 'tip'))
 ```
 
-Maybe this further reduction comes after naming corrections above, or after reducing to the "major crop of each multispecific group"? (They had to do this in order to map FAOSTAT production data onto food species, but we don't need to).  
+```{r}
+# Make a simplified version of this for major crop tally in visualization:
+major.crop <- 
+     metadata %>% 
+     select(species_name_, # Tip labels in tree
+            Species) %>%  # From FAO labeling
+     distinct() %>% 
+     mutate(major_crop = ifelse(!is.na(Species),
+                                yes = TRUE,
+                                no = FALSE))
+```
+
+```{r}
+# Now, add if the taxon is in the reference
+# First, need to align naming with tip names to do lookup
+db.df <- 
+     db.df %>% 
+     mutate(species_name_ = 
+                 gsub(name,
+                      pattern = ' var\\. .*$', 
+                      replacement = ''),
+            species_name_ =
+                 gsub(species_name_,
+                      pattern = ' subsp\\. .*$', 
+                      replacement = ''))
+```
+
+```{r}
+# Find those more than 3 words long
+ex <- '\\w+\\s\\w+\\s'
+db.df %>% 
+     filter(grepl(species_name_, pattern = ex))
+```
+Ok, checking against major crops, now know to remove "x" designation-- this will get us a few more matches (except Glycyrrhiza and Juglans). Can safely ignore these because each component species is in the reference and will match. 
+
+```{r}
+db.df <- 
+     db.df %>% 
+     mutate(species_name_ = 
+                 gsub(species_name_,
+                      pattern = ' f\\. .*$', 
+                      replacement = ''),
+            species_name_ =
+                 gsub(species_name_,
+                      pattern = ' x ', 
+                      replacement = ' '), 
+            # Final mutate to add underscore
+            species_name_ = 
+                 gsub(species_name_,
+                      pattern = ' ',
+                      replacement = '_')
+            )
+```
+
+Thinking I can add this to the tree as a heatmap-style layer (function gheatmap-- following example in Fig. 4.17 [here](https://guangchuangyu.github.io/ggtree-book/chapter-ggtree.html)).
+
+```{r}
+# Now, add as column to major crop dataframe:
+head(major.crop)
+```
+```{r}
+major.crop$in_ref <- 
+     major.crop$species_name_ %in% db.df$species_name_
+
+sum(major.crop$in_ref)
+```
+
+```{r}
+# Now, add subtler agreement categories (if I want to color-code)
+major.crop <- 
+     major.crop %>% 
+     mutate(agree = major_crop & in_ref,
+            yes_crop_no_ref = major_crop & !in_ref,
+            no_crop_yes_ref = !major_crop & in_ref)
+```
 
 # Statistics
 
