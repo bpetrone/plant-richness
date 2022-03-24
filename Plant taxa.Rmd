@@ -437,13 +437,13 @@ range(width(db)) - nchar('GGGCAATCCTGAGCCAA') - nchar('CCATTGAGTCTCTGCACCTATC')
 First, try visualizing *just* Phylo Food tree
 ```{r}
 t <- ggtree(tree,
-            layout = 'circular') +
-     geom_tiplab(size = 0.5) +
-     geom_text2(aes(subset=!isTip,
-                    label = node),
-                color = 'red',
-                hjust = -0.3,
-                size = 0.5)
+            layout = 'circular')
+     # geom_tiplab(size = 0.5) +
+     # geom_text2(aes(subset=!isTip,
+     #                label = node),
+     #            color = 'red',
+     #            hjust = -0.3,
+     #            size = 0.5)
 
 t
 ```
@@ -454,41 +454,12 @@ Now, try overlaying species that are in the reference. From above, just by simpl
 sum(taxa.ref %in% taxa.tree)
 ```
 
-Name as in tree style so I can directly reference tip labels.
-```{r}
-db.df <- 
-     db.df %>% 
-     # Remove subspecies and variety info
-     mutate(tree_name = gsub(name,
-                             pattern = ' var\\. .*$', 
-                             replacement = ''),
-            tree_name = gsub(tree_name,
-                             pattern = ' subsp\\. .*$', 
-                             replacement = '')) %>% 
-     # Replace space with underscore
-     mutate(tree_name = gsub(pattern = ' ',
-                             replacement = '_',
-                             tree_name))
-
-taxa.ref <- 
-     db.df %>% 
-     pull(tree_name) %>% 
-     unique()
-
-head(taxa.ref)
-```
-
-```{r}
-length(setdiff(taxa.ref, tree$tip.label))
-length(setdiff(tree$tip.label, taxa.ref))
-```
-
 groupOTU accepts a vector of OTUs (taxa name) or a list of OTUs. groupOTU will trace back from OTUs to their most recent common ancestor and cluster them together,
 
 ```{r}
 tree.overlay <- 
      groupOTU(tree,
-              .node = taxa.ref)
+              .node = unique(db.df$species_name_))
 ```
 
 ```{r}
@@ -496,71 +467,6 @@ t <-
      ggtree(tree.overlay,
             aes(color = group),
             layout = 'circular') +
-     # Basal magnolids
-     geom_hilight(node = 1547,
-                  fill = '#7e756d', 
-                  alpha = 0.5,
-                  size = 0) +
-     # Non-Poales monocots
-     # Fabidae
-     geom_hilight(node = 1025,
-                  fill = '#849db1',
-                  alpha = 0.8,
-                  size = 0) +
-     # Campanulidae
-     geom_hilight(node = 800,
-                  fill = '#ffda66',
-                  alpha = 0.8,
-                  size = 0) +
-     # Lamiidae
-     geom_hilight(node = 853,
-                  fill = '#fbb04e',
-                  alpha = 0.8,
-                  size = 0) +
-     # Malvidae
-     geom_hilight(node = 1269,
-                  fill = '#4f6980',
-                  alpha = 0.8,
-                  size = 0) +
-     # Poaceae
-     geom_hilight(node = 1427,
-                  fill = '#b66353',
-                  alpha = 0.8,
-                  size = 0) +
-     # # Non-Poales monocots
-     geom_hilight(node = 1516,
-                  fill = '#ff9da7',
-                  alpha = 0.8,
-                  size = 0) +
-     geom_hilight(node = 1532,
-                  fill = '#ff9da7',
-                  alpha = 0.8,
-                  size = 0) +
-     geom_hilight(node = 1476,
-                  fill = '#ff9da7',
-                  alpha = 0.8,
-                  size = 0) +
-     geom_hilight(node = c(1407, 1512),
-                  fill = '#ff9da7',
-                  alpha = 0.8,
-                  size = 0) +
-     # Other Eudicots (add in installments 2/2 tree structure)
-     geom_hilight(node = 964,
-                  fill = '#638b66',
-                  alpha = 0.8,
-                  size = 0) +
-     geom_hilight(node = 932,
-                  fill = '#638b66',
-                  alpha = 0.8,
-                  size = 0) +
-     geom_hilight(node = 1392,
-                  fill = '#638b66',
-                  alpha = 0.8,
-                  size = 0) +
-     geom_hilight(node = 1394,
-                  fill = '#638b66',
-                  alpha = 0.8,
-                  size = 0) +
      # geom_tiplab(aes(subset = (label %in% taxa.ref), size = 0.5),
      # geom_tiplab(size = 0.8) +
      scale_color_manual(values = c('gray80', 'black')) +
