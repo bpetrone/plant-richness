@@ -1,7 +1,9 @@
 ---
-title: "Figure 1A"
+title: "Plant taxa"
 output: html_notebook
 ---
+
+Used to make Figure 1B.
 
 # Setup
 
@@ -11,12 +13,15 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 ```
 
 ```{r, include=FALSE, echo=FALSE}
+library(ape) # For phylogenetic trees
 library(Biostrings)
+library(ggtree)
+library(ggtreeExtra)
 library(here)
 library(phyloseq)
 library(MButils) # For lowest level naming
 library(metacoder)
-library(RColorBrewer)
+library(Taxonstand) # For synchronizing plant names
 library(tidyverse)
 library(vegan)
 library(UpSetR)
@@ -29,7 +34,10 @@ Note this is already trimmed to only those taxa identified to a food species, wi
 ```{r}
 # Read in last saved phyloseq
 ps <- 
-     here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds') %>% 
+     here('data', 
+          'processed',
+          'phyloseq',
+          'trnL_combined_ps.rds') %>% 
      readRDS()
 
 ps
@@ -49,9 +57,62 @@ db <-
      readDNAStringSet()
 ```
 
+#### PhyloFood
+
+This follows on tree presented by Ruben Milla in "Crop Origins and Phylo Food: A database and a phylogenetic tree to stimulate comparative analyses on the origins of food crops."
+
+From README:
+This folder contains five files:
+A readme file (readme_ phylo_food_live.txt);
+The R code used to build the tree (phylo_food_live_code.txt);
+the literature sources cited in the code and used to resolve the tree, in BibTeX format (sources_used_to_resolve_phylo_food_live.txt);
+the time-calibrated and fully resolved phylogenetic tree of crop species (phylo_food_live.tre);
+the non-fully resolved phylogenetic tree of vascular plants, including the 866 species of crops (phylo_GBOTB_with_crops_live.tre).
+
+```{r}
+crop.dir <- 
+     here('data',
+          'processed',
+          'reference',
+          'Crop_Origins_Phylo',
+          'Crop_Origins_Phylo_v_live')
+
+metadata <- 
+     here(crop.dir,
+          'crop_origins_v_live',
+          'crop_origins_live_db.csv') %>% 
+     read_delim(delim = ';')
+
+tree <- 
+     here(crop.dir,
+          'phylo_food_v_live',
+          'phylo_food_live.tre') %>% 
+     ape::read.tree()
+```
+
+## FAO name mapping
+
+from Martin et al., PLOS ONE, 2019
+
+```{r}
+fao.names <- 
+     here('..',
+          'food-dbs',
+          'data',
+          'processed',
+          'parsed-refs',
+          'Martin_PLOSONE_2019_FAOSTAT to taxon mapping.csv') %>% 
+     read_csv()
+```
+
+```{r}
+dim(fao.names)
+```
+
 # Pre-process
 
 ## trnL
+
 ```{r}
 # First, remove name column from taxonomy, as not needed here
 taxtab <- 
@@ -62,7 +123,93 @@ taxtab <-
 tax_table(ps) <- tax_table(as.matrix(taxtab))
 ```
 
-## Reference
+## Tree data
+
+### CropOrigins
+
+Here, likely want to subset to only species used as food.
+
+```{r}
+names(metadata)
+```
+
+```{r}
+# Get entries for use categories
+metadata %>% 
+     select(starts_with('use')) %>% 
+     apply(2, unique)
+```
+
+```{r}
+metadata %>% 
+     group_by(use_food) %>% 
+     count()
+```
+```{r}
+# Tip labels are already encoded in the variable 'species_name_'
+# Add major/minor crop data
+# First, format compatibly with tip labels
+fao.names <- 
+     fao.names %>% 
+     # Remove infraspecific labels
+     mutate(tip = gsub(pattern = 'var.*',
+                       replacement = '', 
+                       Species),
+            tip = gsub(pattern = 'subsp.*',
+                       replacement = '', 
+                       tip),
+            # Replace space with underscore
+            tip = gsub(tip, 
+                       pattern = ' ',
+                       replacement = '_')) 
+```
+
+```{r}
+# Join to metadata
+metadata <- 
+     left_join(metadata, fao.names,
+               by = c('species_name_' = 'tip'))
+```
+
+```{r}
+# Make a simplified version of this for major crop tally in visualization:
+major.crop <- 
+     metadata %>% 
+     select(species_name_, # Tip labels in tree
+            Species) %>%  # From FAO labeling
+     distinct() %>% 
+     mutate(major_crop = ifelse(!is.na(Species),
+                                yes = TRUE,
+                                no = FALSE))
+```
+
+### PhyloFood
+
+```{r}
+str(tree)
+```
+
+Interesting that internal nodes aren't labeled here.  This would be nice because some metabarcoding entries will terminate internally in the tree. Or could I just display species, without collapsing up to last common ancestor?
+
+```{r}
+# Filter to only those used as food, get names in same format as tree
+crops <- 
+     metadata %>% 
+     filter(use_food == 1) %>% 
+     pull(species_name) %>% 
+     gsub(pattern = ' ', replacement = '_')
+
+head(crops)
+```
+
+```{r}
+# Subset tree to these taxa only
+tree <- keep.tip(tree, crops)
+
+tree
+```
+
+### Reference
 
 Organize in a taxonomy-table style.
 
@@ -77,6 +224,7 @@ db.df <-
 
 db.df
 ```
+
 ```{r}
 # Separate name and assign ranks
 db.df <- 
@@ -91,12 +239,262 @@ db.df <-
 db.df$seq <- as.character(db)
 ```
 
+Steps for taxonomy: DON'T RUN RIGHT NOW
+
 ```{r}
 # Look up accession taxonomy with taxa package functions
-taxmap <- taxa::lookup_tax_data(db.df$accession, 
+taxmap <- metacoder::lookup_tax_data(db.df$accession, 
                                 type = 'seq_id')
 ```
 
+```{r}
+# Make taxonomy table
+# Note may need to make changes to ranks below based on animal/plant db
+taxonomy <- 
+     metacoder::taxonomy_table(taxmap, 
+                          use_ranks = c('superkingdom', 
+                                        'kingdom',
+                                        'phylum', 
+                                        'order', 
+                                        'family',
+                                        'genus', 
+                                        'species',
+                                        'subspecies',
+                                        'varietas'),
+                          add_id_col = TRUE) %>% 
+     data.frame()
+```
+
+Note that not all taxids are terminally listed here:
+```{r}
+dim(taxonomy)[1]
+length(unique(taxmap$data$query_data))
+```
+
+This is because some are internal nodes. Manually add their taxonomy too:
+
+```{r }
+add <- setdiff(unique(names(taxmap$data$query_data)),
+               taxonomy$taxon_id)
+
+length(add)
+```
+
+Interesting.  Thinking that differences here (compared to 858-525 above) are due to repeated taxa?
+
+```{r}
+# Manually inspect
+taxmap$data$tax_data %>%
+     filter(taxon_id %in% add) %>% 
+     View()
+
+# Write full table, subset these columns out
+# write_csv(taxonomy,
+#           here('data', 
+#                'processed',
+#                'reference',
+#                '20220216_Internal taxonomy table nodes.csv'))
+
+add.rows <-
+     here('data',
+          'processed',
+          'reference',
+          '20220216_Internal taxonomy table nodes.csv') %>%
+     read_csv(col_types = cols(.default = 'c'))
+```
+
+
+```{r }
+# Bind together
+taxonomy <-
+     taxonomy %>%
+     bind_rows(add.rows) %>%
+     as.data.frame() # This is required in order for lowest level step to work-- so weird-- the code below doesn't seem to work on a tibble
+```
+
+```{r}
+# Now, connect this back to the database and make sure that everything has an entry
+
+# Link from accession to taxon ID
+dim(db.df)
+db.df <- 
+     data.frame(accession = taxmap$data$query_data,
+                taxon_id = names(taxmap$data$query_data)) %>% 
+     left_join(db.df, .) %>% 
+     distinct()
+dim(db.df)
+```
+
+```{r}
+# Link from taxon ID to taxonomy
+db.df <- 
+     left_join(db.df, taxonomy)
+
+# Any missing a species-level designation?
+any(is.na(db.df$species))
+```
+
+### Integrate
+
+How many names are present in tree labels? 592 in reference:
+
+```{r}
+taxa.ref <- 
+     db.df %>% 
+     pull(name) %>% 
+     unique()
+
+taxa.tree <- 
+     tree$tip.label %>% 
+     gsub(pattern = '_', replacement = ' ')
+
+head(taxa.ref)
+head(taxa.tree)
+```
+
+Interesting-- note that every entry appears to be at the species level.  Don't worry about extending for now; instead, drop subspecies and variety info.
+
+```{r}
+taxa.ref <- 
+     taxa.ref %>% 
+     gsub(pattern = ' var\\. .*$', replacement = '') %>% 
+     gsub(pattern = ' subsp\\. .*$', replacement = '')
+
+sum(taxa.ref %in% taxa.tree)/length(taxa.ref)
+```
+
+```{r}
+taxa.ref[!(taxa.ref %in% taxa.tree)] %>% head(20)
+```
+
+```{r}
+taxa.tree[!(taxa.tree %in% taxa.ref)] %>% head(20)
+```
+
+#### Relabel internal nodes
+
+https://bioconnector.github.io/workshops/r-ggtree.html#internal_node_number
+
+Another idea would be to just numerically label the internal nodes, then manually note the ones I want to highlight. 
+
+```{r}
+head(tree$edge)
+dim(tree$edge)
+```
+
+"The matrix edge contains the beginning and ending node number for all the nodes and tips in the tree. By convention, the tips of the tree are numbered 1 through n for n tips; and the nodes are numbered n + 1 through n + m for m nodes. m = n - 1 for a fully bifurcating tree. This is just to keep track of which nodes are internal and which are leaves."
+
+```{r}
+# First, organize and put nodes in order
+labels.df <- data.frame(tree$edge)
+
+labels.df <- 
+     labels.df %>% 
+     rownames_to_column(var = 'edge') %>% 
+     group_by(edge) %>% 
+     mutate(from = max(X1, X2),
+            to = min(X1, X2)) %>% 
+     ungroup()
+```
+
+```{r}
+# Get tip names
+tips <- 
+     data.frame(name = tree$tip.label,
+                number = 1:866) 
+
+# Join to overall labels
+labels.df <- left_join(labels.df, tips, by = c('to'='number'))
+```
+
+```{r}
+# Now get genus labels from those:
+genera <- 
+     labels.df %>% 
+     filter(!is.na(name)) %>% 
+     select(from, name) %>% 
+     mutate(genus = gsub('_.*', '', name)) %>% 
+     select(from, genus) %>% 
+     distinct()
+
+dim(genera)
+```
+
+```{r}
+# Note that some are duplicated
+# For that, just want to choose the largest (most internal?? node and label that one)
+genera <- 
+     genera %>% 
+     group_by(genus) %>% 
+     summarize(number = max(from))
+
+# Now label these in the node list
+# Just label in the 'to' column
+labels.df <- 
+     labels.df %>% 
+     left_join(., genera, by = c('to'='number')) %>% 
+     mutate(name = ifelse(is.na(name), 
+                          yes = genus,
+                          no = name)) %>% 
+     select(-genus)
+```
+
+```{r}
+# Relabel in tree
+head(tree$node.label)
+length(tree$node.label)
+```
+
+```{r}
+# Subtract 866 from index
+# tree$node.label <- 
+#      labels.df %>% 
+#      select(to, name) %>% 
+#      filter(to > 866) %>% 
+#      mutate(to = to - 866) %>% 
+#      pull(name)
+```
+
+Or try using ape::makeNodeLabel
+
+```{r}
+nodeList <- unique(db.df$genus)
+names(nodeList) <- nodeList
+
+# This ran for ~5 mins with no results
+# ape::makeNodeLabel(tree,
+#                    method = 'user',
+#                    nodeList = nodeList)
+```
+
+#### Taxonstand
+
+Try synchronizing names to see how this impacts result.
+
+```{r}
+# Getting error here-- need to follow up
+# taxonstand <- Taxonstand::TPL(db.df$name)
+```
+
+## Add major/minor crop label
+
+Interestingly, from Milla et al. 2021 methods: "Before matching, the FAO Commodity List was checked for taxonomic accuracy and validity against The Plant List using function TPL of the Taxonstand package in R v.3.6.2. Commodity groups composed of a single crop species were automatically matched but most groups included several taxa. However, all groups but wheat were composed of a major contributor to agricultural production, together with congeneric minor crops. Therefore, production data were assigned to the major crop of each multispecific group. For wheat, we assigned 93% of production to bread wheat and 7% to durum. *The 112 crop species with a tracked record in FAOSTAT* were operationally coded as major crops and the remaining 754 crop species that were included in the Crop Origins database, but which lacked a FAOSTAT record, were considered as minor crops."
+
+However, more than 112 listed:
+```{r}
+dim(fao.names)
+n_distinct(fao.names$Species)
+```
+
+Do only 112 turn up in PhyloFood taxa?
+
+```{r}
+intersect(tree$tip.label,
+          fao.names$tip) %>% 
+     length()
+```
+
+Maybe this further reduction comes after naming corrections above, or after reducing to the "major crop of each multispecific group"? (They had to do this in order to map FAOSTAT production data onto food species, but we don't need to).  
 
 # Statistics
 
@@ -104,26 +502,230 @@ How many distinct taxa?
 
 ```{r}
 db.df %>% 
-     select(-seq) %>% 
-     MButils::lowest_level() %>% 
-     pull(name) %>% 
+     select(name) %>% 
      n_distinct()
 ```
 
-How many unique sequences?
+How many total sequences? Had previously reported unique, but I don't think this makes sense.
 
 ```{r}
-n_distinct(db.df$seq)
+length(db.df$seq)
+```
+
+Range of sequence lengths
+
+```{r}
+# Subtract length of primer sequences
+range(width(db)) - nchar('GGGCAATCCTGAGCCAA') - nchar('CCATTGAGTCTCTGCACCTATC')
 ```
 
 # Visualize taxa
 
+## Overlay on Phylo Food
+
+First, try visualizing *just* Phylo Food tree
+```{r}
+t <- ggtree(tree,
+            layout = 'circular') +
+     geom_tiplab(size = 0.5) +
+     geom_text2(aes(subset=!isTip,
+                    label = node),
+                color = 'red',
+                hjust = -0.3,
+                size = 0.5)
+
+t
+```
+
+Now, try overlaying species that are in the reference. From above, just by simple text matching, this is 
+
+```{r}
+sum(taxa.ref %in% taxa.tree)
+```
+
+Name as in tree style so I can directly reference tip labels.
+```{r}
+db.df <- 
+     db.df %>% 
+     # Remove subspecies and variety info
+     mutate(tree_name = gsub(name,
+                             pattern = ' var\\. .*$', 
+                             replacement = ''),
+            tree_name = gsub(tree_name,
+                             pattern = ' subsp\\. .*$', 
+                             replacement = '')) %>% 
+     # Replace space with underscore
+     mutate(tree_name = gsub(pattern = ' ',
+                             replacement = '_',
+                             tree_name))
+
+taxa.ref <- 
+     db.df %>% 
+     pull(tree_name) %>% 
+     unique()
+
+head(taxa.ref)
+```
+
+```{r}
+length(setdiff(taxa.ref, tree$tip.label))
+length(setdiff(tree$tip.label, taxa.ref))
+```
+
+groupOTU accepts a vector of OTUs (taxa name) or a list of OTUs. groupOTU will trace back from OTUs to their most recent common ancestor and cluster them together,
+
+```{r}
+tree.overlay <- 
+     groupOTU(tree,
+              .node = taxa.ref)
+```
+
+```{r}
+t <- 
+     ggtree(tree.overlay,
+            aes(color = group),
+            layout = 'circular') +
+     # Basal magnolids
+     geom_hilight(node = 1547,
+                  fill = '#7e756d', 
+                  alpha = 0.5,
+                  size = 0) +
+     # Non-Poales monocots
+     # Fabidae
+     geom_hilight(node = 1025,
+                  fill = '#849db1',
+                  alpha = 0.8,
+                  size = 0) +
+     # Campanulidae
+     geom_hilight(node = 800,
+                  fill = '#ffda66',
+                  alpha = 0.8,
+                  size = 0) +
+     # Lamiidae
+     geom_hilight(node = 853,
+                  fill = '#fbb04e',
+                  alpha = 0.8,
+                  size = 0) +
+     # Malvidae
+     geom_hilight(node = 1269,
+                  fill = '#4f6980',
+                  alpha = 0.8,
+                  size = 0) +
+     # Poaceae
+     geom_hilight(node = 1427,
+                  fill = '#b66353',
+                  alpha = 0.8,
+                  size = 0) +
+     # # Non-Poales monocots
+     geom_hilight(node = 1516,
+                  fill = '#ff9da7',
+                  alpha = 0.8,
+                  size = 0) +
+     geom_hilight(node = 1532,
+                  fill = '#ff9da7',
+                  alpha = 0.8,
+                  size = 0) +
+     geom_hilight(node = 1476,
+                  fill = '#ff9da7',
+                  alpha = 0.8,
+                  size = 0) +
+     geom_hilight(node = c(1407, 1512),
+                  fill = '#ff9da7',
+                  alpha = 0.8,
+                  size = 0) +
+     # Other Eudicots (add in installments 2/2 tree structure)
+     geom_hilight(node = 964,
+                  fill = '#638b66',
+                  alpha = 0.8,
+                  size = 0) +
+     geom_hilight(node = 932,
+                  fill = '#638b66',
+                  alpha = 0.8,
+                  size = 0) +
+     geom_hilight(node = 1392,
+                  fill = '#638b66',
+                  alpha = 0.8,
+                  size = 0) +
+     geom_hilight(node = 1394,
+                  fill = '#638b66',
+                  alpha = 0.8,
+                  size = 0) +
+     # geom_tiplab(aes(subset = (label %in% taxa.ref), size = 0.5),
+     # geom_tiplab(size = 0.8) +
+     scale_color_manual(values = c('gray80', 'black')) +
+     theme(legend.position = 'none')
+
+t
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+ggsave(here('results',
+            'manuscript',
+            '1',
+            paste0(plotID, '_Overlay on Phylo Food tree (with colors).eps')),
+       # Try this to preserve background transparency
+       device = cairo_ps,
+       height = 10, width = 10)
+```
+
+```{r}
+# Now, try adding major/minor crop data in outer ring
+t + 
+     geom_fruit(
+          data = major.crop,
+          geom = geom_bar,
+          mapping = aes(y = species_name_, 
+                        x = 1,
+                        fill = major_crop),
+          stat = 'identity',
+          orientation = 'y') +
+     # Fill values for major/minor crop
+     scale_fill_manual(values = c('white', 'black'))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+ggsave(here('results',
+            'manuscript',
+            '1',
+            paste0(plotID, '_Overlay on Phylo Food tree (major crop label and types).eps')),
+       # Try this to preserve background transparency
+       device = cairo_ps,
+       height = 10, width = 10)
+```
+
 ## Metacoder tree
 
-### All samples
+### Reference
+
+#### Full tree
+
+This doesn't take into account the fact that some of our detections won't match nodes because of sequence duplication.
+
 ```{r}
-# Convert phyloseq object to taxmap
-x <- parse_phyloseq(ps)
+# Consider every taxon in the reference
+# Make a dummy phyloseq object to hold
+taxtab <- 
+     taxonomy %>% 
+     column_to_rownames(var = 'taxon_id') %>% 
+     as.matrix()
+
+asvtab <- matrix(data = 1,
+                 nrow = 1,
+                 ncol = dim(taxtab)[1],
+                 dimnames = list('all', row.names(taxtab)))
+
+ps.ref <- 
+     phyloseq(tax_table(taxtab),
+              otu_table(asvtab, taxa_are_rows = FALSE))
+
+ps.ref
+```
+
+```{r}
+x.ref <- parse_phyloseq(ps.ref)
 ```
 
 377 taxa, and 117 terminal nodes
@@ -133,14 +735,14 @@ Okay!  So calc_taxon_abund converts "per-observation counts (e.g. OTU counts) to
 # 1. calc_taxon_abund
 # 2. counts_to_presence
 
-x$data$tax_abund <- calc_taxon_abund(x, 
-                                     'otu_table')
+x.ref$data$tax_abund <- calc_taxon_abund(x.ref, 
+                                         'otu_table')
 
-dim(x$data$tax_abund)
+dim(x.ref$data$tax_abund)
 
 # Convert to presence-absence
-x$data$tax_abund <- counts_to_presence(x, 'tax_abund')
-x$data$tax_abund
+x.ref$data$tax_abund <- counts_to_presence(x.ref, 'tax_abund')
+x.ref$data$tax_abund
 ```
 ```{r}
 # Convert to numeric, in order to...
@@ -157,142 +759,36 @@ x$data$tax_occ <-
 # Plot heat tree based on presence-absence data (base plot -- no group color)
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 
-pdf(here('results', 'manuscript', '5', 
-          paste0(plotID, '_A_n samples detected, size.pdf')),
+pdf(here('results', 
+         'manuscript', 
+         '1', 
+          paste0(plotID, '_Full reference.pdf')),
          height = 10, width = 10)
 
-pal <- brewer.pal(9, 'Greens')
-
 heat_tree(
-     x,
+     x.ref,
      node_label = taxon_names,
-     node_color = n_samples,
-     node_color_range = pal[1:7],
-     node_size = n_samples,
-     node_size_range = c(0.005, 0.025),
+     # node_color = n_samples,
+     # node_color_range = pal[1:7],
+     # node_size = n_samples,
+     # node_size_range = c(0.005, 0.025),
      node_legend_title = element_blank(),
      node_color_axis_label = 'Samples (n)'
 )
 ```
 
-Now, try with group color
-Need to re-make data structure.
+#### Realistic tree
 
-```{r}
-# Following tutorial https://github.com/grunwaldlab/metacoder/issues/267: 
-# 1. calc_taxon_abund
-# 2. counts_to_presence
+This is with last common ancestor labeling done as would be in object.
 
-x$data$tax_abund <- calc_taxon_abund(x, 
-                                     'otu_table',
-                                     groups = x$data$sample_data$study)
-
-dim(x$data$tax_abund)
-
-# Convert to presence-absence
-x$data$tax_abund <- counts_to_presence(x, 'tax_abund')
-x$data$tax_abund
-```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-
-pdf(here('results', 'manuscript', '5', 
-          paste0(plotID, '_A_detected (Adolescent).pdf')),
-         height = 10, width = 10)
-
-# Detected
-heat_tree(x, 
-          node_size_range = c(0.01, 0.01),
-          node_color = ifelse(Adolescent, "red", "grey"))
-
-pdf(here('results', 'manuscript', '5', 
-          paste0(plotID, '_A_not detected (Adolescent).pdf')),
-         height = 10, width = 10)
-
-# Not detected
-heat_tree(x, 
-          node_size_range = c(0.01, 0.01),
-          node_color = ifelse(Adolescent, "grey", "red"),
-          node_label = taxon_names)
-```
-Color argument "accepts a vector, the same length taxon_id or a factor of its length."
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-
-pdf(here('results', 'manuscript', '5', 
-          paste0(plotID, '_A_detected (Adult-1).pdf')),
-         height = 10, width = 10)
-
-# Detected
-heat_tree(x, 
-          node_size_range = c(0.01, 0.01),
-          node_color = ifelse(x$data$tax_abund$`Adult-1`, "red", "grey"))
-
-pdf(here('results', 'manuscript', '5', 
-          paste0(plotID, '_A_not detected (Adult-1).pdf')),
-         height = 10, width = 10)
-
-# Not detected
-heat_tree(x, 
-          node_size_range = c(0.01, 0.01),
-          node_color = ifelse(x$data$tax_abund$`Adult-1`, "grey", "red"))
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-
-# Detected
-pdf(here('results', 'manuscript', '5', 
-          paste0(plotID, '_A_detected (Adult-2).pdf')),
-         height = 10, width = 10)
-
-heat_tree(x, 
-          node_size_range = c(0.01, 0.01),
-          node_color = ifelse(x$data$tax_abund$`Adult-2`, "red", "grey"))
-
-# Not detected
-pdf(here('results', 'manuscript', '5', 
-          paste0(plotID, '_A_not detected (Adult-2).pdf')),
-         height = 10, width = 10)
-
-heat_tree(x, 
-          node_size_range = c(0.01, 0.01),
-          node_color = ifelse(x$data$tax_abund$`Adult-2`, "grey", "red"))
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-
-# Detected
-pdf(here('results', 'manuscript', '5', 
-          paste0(plotID, '_A_detected (Weight Loss).pdf')),
-         height = 10, width = 10)
-
-heat_tree(x, 
-          node_size_range = c(0.01, 0.01),
-          node_color = ifelse(x$data$tax_abund$`Weight Loss`, "red", "grey"))
-
-# Not detected
-pdf(here('results', 'manuscript', '5', 
-          paste0(plotID, '_A_not detected (Weight Loss).pdf')),
-         height = 10, width = 10)
-
-heat_tree(x, 
-          node_size_range = c(0.01, 0.01),
-          node_color = ifelse(x$data$tax_abund$`Weight Loss`, "grey", "red"))
-```
-
-### Possible v actual detection
-
-#### Make full tree from reference
-
-- Group by sequence (including subsequences: Remember that in current version (2021/08/25) some sequences have primers and some don't.  Because of this, can't search by exact matching)
+- Group by sequence
+     + Are any subsequences?
 - Do last common ancestor
 - Get "full" taxonomy
 - Extend phyloseq object
 
 ```{r}
-# Label substrings
+# Are any sequences substrings of one another?
 seqs <- db.df$seq
 
 substring <- function(s){
@@ -307,6 +803,10 @@ db.df$ss <-
      lapply(db.df$seq,
             substring) %>% 
      unlist()
+
+db.df %>% 
+     filter(ss) %>% View()
+
 ```
 
 #### Add possible taxa
@@ -383,8 +883,6 @@ taxtab <-
      distinct() # Some of the taxa were already detected
 ```
 
-
-
 Now can update ASV table
 
 ```{r}
@@ -448,6 +946,152 @@ ps <- phyloseq(otu_table(asvtab, taxa_are_rows = FALSE),
                tax_table(as.matrix(taxtab)))
 
 ps
+```
+
+```{r}
+
+```
+
+
+### All samples
+
+```{r}
+# Convert phyloseq object to taxmap
+x <- parse_phyloseq(ps)
+```
+
+Okay!  So calc_taxon_abund converts "per-observation counts (e.g. OTU counts) to per-taxon counts", where the per-taxon counts span the full tree
+```{r}
+# Following tutorial https://github.com/grunwaldlab/metacoder/issues/267: 
+# 1. calc_taxon_abund
+# 2. counts_to_presence
+
+x$data$tax_abund <- calc_taxon_abund(x, 
+                                     'otu_table')
+
+dim(x$data$tax_abund)
+
+# Convert to presence-absence
+x$data$tax_abund <- counts_to_presence(x, 'tax_abund')
+x$data$tax_abund
+```
+```{r}
+# Convert to numeric, in order to...
+x$data$tax_abund <- 
+     x$data$tax_abund %>% 
+     mutate(across(-taxon_id, as.numeric))
+
+# ...total counts per taxon in this presence-absence scheme
+x$data$tax_occ <- 
+     calc_n_samples(x, 'tax_abund')
+```
+
+```{r}
+# Plot heat tree based on presence-absence data (base plot -- no group color)
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+pdf(here('results', 
+         'manuscript', 
+         '5', 
+         paste0(plotID, '_Samples detected, size.pdf')),
+         height = 10, width = 10)
+
+pal <- brewer.pal(9, 'Greens')
+
+heat_tree(
+     x,
+     node_label = taxon_names,
+     node_color = n_samples,
+     node_color_range = pal[1:7],
+     node_size = n_samples,
+     node_size_range = c(0.005, 0.025),
+     node_legend_title = element_blank(),
+     node_color_axis_label = 'Samples (n)'
+)
+```
+
+Now, try with group color
+Need to re-make data structure.
+
+```{r}
+# Following tutorial https://github.com/grunwaldlab/metacoder/issues/267: 
+# 1. calc_taxon_abund
+# 2. counts_to_presence
+
+x$data$tax_abund <- calc_taxon_abund(x, 
+                                     'otu_table',
+                                     groups = x$data$sample_data$study)
+
+dim(x$data$tax_abund)
+
+# Convert to presence-absence
+x$data$tax_abund <- counts_to_presence(x, 'tax_abund')
+x$data$tax_abund
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+pdf(here('results', 
+         'manuscript', 
+         '5', 
+         paste0(plotID, '_Detected (Adolescent).pdf')),
+         height = 10, width = 10)
+
+# Detected
+heat_tree(x, 
+          node_size_range = c(0.005, 0.025),
+          node_size = n_samples,
+          node_legend_title = element_blank(),
+          node_color = ifelse(Adolescent, pal[7], "grey"))
+```
+Color argument "accepts a vector, the same length taxon_id or a factor of its length."
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+pdf(here('results',
+         'manuscript',
+         '5', 
+          paste0(plotID, '_Detected (Adult-1).pdf')),
+         height = 10, width = 10)
+
+# Detected
+heat_tree(x, 
+          node_size_range = c(0.005, 0.025),
+          node_size = n_samples,
+          node_legend_title = element_blank(),
+          node_color = ifelse(x$data$tax_abund$`Adult-1`, pal[7], "grey"))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+# Detected
+pdf(here('results', 
+         'manuscript', 
+         '5', 
+         paste0(plotID, '_Detected (Adult-2).pdf')),
+         height = 10, width = 10)
+
+heat_tree(x, 
+          node_size_range = c(0.005, 0.025),
+          node_size = n_samples,
+          node_legend_title = element_blank(),
+          node_color = ifelse(x$data$tax_abund$`Adult-2`, pal[7], "grey"))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+# Detected
+pdf(here('results', 'manuscript', '5', 
+          paste0(plotID, '_Detected (Weight Loss).pdf')),
+         height = 10, width = 10)
+
+heat_tree(x, 
+          node_size_range = c(0.005, 0.025),
+          node_size = n_samples,
+          node_legend_title = element_blank(),
+          node_color = ifelse(x$data$tax_abund$`Weight Loss`, pal[7], "grey"))
 ```
 
 #### Visualize
@@ -550,10 +1194,10 @@ union(weightloss.taxa, adult1.taxa) %>%
 
 ```{r}
 # How many *not* detected in each?
-118 - length(weightloss.taxa)
-118 - length(adult1.taxa)
-118 - length(adult2.taxa)
-118 - length(adolescent.taxa)
+146 - length(weightloss.taxa)
+146 - length(adult1.taxa)
+146 - length(adult2.taxa)
+146 - length(adolescent.taxa)
 ```
 
 ```{r}
