@@ -456,7 +456,10 @@ sum(taxa.ref %in% taxa.tree)
 
 groupOTU accepts a vector of OTUs (taxa name) or a list of OTUs. groupOTU will trace back from OTUs to their most recent common ancestor and cluster them together,
 
+### Color by +- reference
+
 ```{r}
+# Create a grouping based on inclusion/exclusion from reference
 tree.overlay <- 
      groupOTU(tree,
               .node = unique(db.df$species_name_))
@@ -468,7 +471,7 @@ t <-
             aes(color = group),
             layout = 'circular') +
      # geom_tiplab(aes(subset = (label %in% taxa.ref), size = 0.5),
-     # geom_tiplab(size = 0.8) +
+     geom_tiplab(size = 0.8) +
      scale_color_manual(values = c('gray80', 'black')) +
      theme(legend.position = 'none')
 
@@ -480,25 +483,82 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results',
             'manuscript',
             '1',
-            paste0(plotID, '_Overlay on Phylo Food tree (with colors).eps')),
+            paste0(plotID, '_Overlay on Phylo Food tree.eps')),
        # Try this to preserve background transparency
        device = cairo_ps,
        height = 10, width = 10)
 ```
 
+### Color by Milla categs
+
+Wonder if I can label by consecutive leaf names?
+Or leaves corresponding to particular internal nodes that I can then back out?
+
+```{r}
+# Do tip names go in order? Think yes:
+tree$tip.label %>% head(50)
+```
+
+Saved these as CSV, then manually labeled with species groupings.  This is so they can be colored using groupOTU, as groupClade was missing a few lingering branches.  
+```{r}
+# Read in annotations
+groups <- 
+     here('data',
+          'processed',
+          'reference',
+          'Phylo Food tip groups.csv') %>% 
+     read_csv()
+
+# Reformat for groupOTU()
+# split(x, f) divides the data in the vector x into the groups defined by f
+x <- split(groups$species_name_, groups$group)
+
+tree.overlay <- 
+     groupOTU(tree,
+              x)
+
+overlay.colors <- 
+     c('#7e756d', # Root branches
+       '#849db1', # Basal magnolids
+       '#fbb04e', # Campanulidae
+       '#6e8b66', # Fabidae
+       '#b66353', # Lamiidae
+       '#4f6980', # Malvidae
+       '#d7ce9f', # Non-Poales monocots
+       '#bfbb60', # Other eudicots
+       '#a2ceaa') # Poales
+```
+
+```{r}
+t <- 
+     ggtree(tree.overlay,
+            aes(color = group),
+            layout = 'circular') +
+     scale_color_manual(values = overlay.colors) +
+     geom_tiplab(size = 0.8) +
+     theme(legend.position = 'none') 
+
+t
+```
+
+
 ```{r}
 # Now, try adding major/minor crop data in outer ring
-t + 
-     geom_fruit(
-          data = major.crop,
-          geom = geom_bar,
-          mapping = aes(y = species_name_, 
-                        x = 1,
-                        fill = major_crop),
-          stat = 'identity',
-          orientation = 'y') +
-     # Fill values for major/minor crop
-     scale_fill_manual(values = c('white', 'black'))
+# Format a bit more precisely
+major.crop <- 
+     column_to_rownames(major.crop, var = 'species_name_')
+
+gheatmap(p = t,
+              data = select(major.crop,
+                            in_ref,
+                            major_crop),
+         offset = 1,
+         width = 0.1,
+         colnames = FALSE,
+         color = NULL
+     ) +
+     scale_fill_manual(values = c('white', 'black')) +
+     theme(legend.position = 'none')
 ```
 
 ```{r}
@@ -507,7 +567,7 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results',
             'manuscript',
             '1',
-            paste0(plotID, '_Overlay on Phylo Food tree (major crop label and types).eps')),
+            paste0(plotID, '_Overlay on Phylo Food tree (types, with labels).eps')),
        # Try this to preserve background transparency
        device = cairo_ps,
        height = 10, width = 10)
