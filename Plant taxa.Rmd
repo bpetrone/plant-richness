@@ -407,6 +407,34 @@ major.crop <-
             no_crop_yes_ref = !major_crop & in_ref)
 ```
 
+```{r}
+# And recode more subtle categories as a numeric scale for coloring plot
+
+# In both crop and reference: 1, dark green
+major.crop$major_crop[major.crop$agree] <- 1
+major.crop$in_ref[major.crop$agree] <- 1
+
+# In reference, but not a major crop: 2, light green
+major.crop$major_crop[major.crop$no_crop_yes_ref] <- 0
+major.crop$in_ref[major.crop$no_crop_yes_ref] <- 2
+
+# Major crop, but not in reference: 3, yellow/orange
+# Not a major crop, not in reference: 0, white
+major.crop$major_crop[major.crop$yes_crop_no_ref] <- 3
+major.crop$in_ref[major.crop$yes_crop_no_ref] <- 0
+
+# Convert to factor
+major.crop <- mutate(major.crop,
+                     across(c(major_crop, in_ref), factor))
+```
+
+```{r}
+# Name rows so compatible with plotting function
+major.crop <- 
+     column_to_rownames(major.crop, var = 'species_name_')
+```
+
+
 # Statistics
 
 How many distinct taxa?
@@ -524,40 +552,48 @@ overlay.colors <-
        '#6e8b66', # Fabidae
        '#b66353', # Lamiidae
        '#4f6980', # Malvidae
-       '#d7ce9f', # Non-Poales monocots
+       '#a2ceaa', # Non-Poales monocots
        '#bfbb60', # Other eudicots
-       '#a2ceaa') # Poales
+       '#d7ce9f') # Poales
 ```
 
 ```{r}
 t <- 
      ggtree(tree.overlay,
             aes(color = group),
-            layout = 'circular') +
+            # layout = 'circular') +
+            layout = 'fan',
+            open.angle = 20) +
      scale_color_manual(values = overlay.colors) +
-     geom_tiplab(size = 0.8) +
+     # geom_tiplab(size = 0.8) +
      theme(legend.position = 'none') 
 
-t
+rotate_tree(t, -20)
 ```
 
+Hmm -- need to figure out how to preserve fan layout with addition of gheatmap data
 
 ```{r}
 # Now, try adding major/minor crop data in outer ring
-# Format a bit more precisely
-major.crop <- 
-     column_to_rownames(major.crop, var = 'species_name_')
-
 gheatmap(p = t,
               data = select(major.crop,
-                            in_ref,
-                            major_crop),
+                            major_crop,
+                            in_ref),
          offset = 1,
          width = 0.1,
          colnames = FALSE,
          color = NULL
      ) +
-     scale_fill_manual(values = c('white', 'black')) +
+     # Traffic color scheme-- a bit busy
+     scale_fill_manual(values = c('white',
+                                  '#309143', # Dark green
+                                  '#8ace7e', # Light green
+                                  'black')) + # Red (maybe gray??)
+     # Grayscale color scheme
+     # scale_fill_manual(values = c('white',
+     #                              'black',
+     #                              '#989ca3',
+     #                              '#ff684c')) +
      theme(legend.position = 'none')
 ```
 
@@ -567,10 +603,45 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results',
             'manuscript',
             '1',
-            paste0(plotID, '_Overlay on Phylo Food tree (types, with labels).eps')),
+            paste0(plotID, '_Overlay on Phylo Food tree.eps')),
        # Try this to preserve background transparency
        device = cairo_ps,
        height = 10, width = 10)
+```
+
+```{r}
+# Do a Chi squared test
+# Are we more or less likely to include a crop in the reference, given its
+# major/minor status?
+
+# Convert data back to binary and tally
+m <- 
+     major.crop %>% 
+     select(major_crop, in_ref) %>% 
+     mutate(across(everything(), ~.x != 0)) %>% 
+     group_by(major_crop, in_ref) %>% 
+     count()
+
+m
+```
+
+```{r}
+# Pivot to wide
+m <- 
+     pivot_wider(m, 
+                 names_from = in_ref,
+                 names_prefix = 'in_ref_',
+                 values_from = n)
+
+m
+```
+```{r}
+test <- chisq.test(m)
+test
+```
+
+```{r}
+test$expected
 ```
 
 ## Metacoder tree
