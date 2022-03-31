@@ -626,53 +626,6 @@ alpha %>%
 ```
 ## Model: pMR response
 
-### Structure for saving model output
-
-```{r}
-# Idea here: make a sandbox for saving models
-results.df <- 
-     data.frame(n = NULL,
-                f = NULL,
-                mixed = NULL,
-                coeff = NULL,
-                beta = NULL,
-                p = NULL)
-```
-
-```{r}
-# Then maybe a function for pulling model output and adding to dataframe
-add_to_df <- function(results, f, mod.summary){
-     # Create new rows to bind to results
-     
-     # Variables that will be the same across all covariates
-     row.start <- 
-          data.frame(n = ifelse(is.infinite(max(results$n)),
-                                yes = 1,
-                                no = max(results$n) + 1),
-                     f = f, 
-                     mixed = ifelse(is.null(mod.summary$isLmer),
-                                    yes = FALSE,
-                                    no = mod.summary$isLmer))
-     
-     
-     # Covariate beta and p values
-     covars <- 
-          mod.summary$coefficients %>% 
-          data.frame() %>% 
-          rownames_to_column(var = 'coeff') %>% 
-          select(coeff,
-                 beta = Estimate,
-                 p = starts_with())
-     
-     results <- 
-          bind_cols(row.start,
-                    covars) %>% 
-          bind_rows(results, .)
-     
-     results
-}
-```
-
 ### Linear model
 
 ```{r}
