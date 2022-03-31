@@ -13,7 +13,6 @@ library(here)
 library(fitdistrplus)
 library(lme4) # For glmer
 library(lmerTest)
-library(mice) # For imputation of missing data
 library(phyloseq)
 library(tidyverse)
 library(vegan) # For rarecurve()
@@ -28,10 +27,29 @@ theme_set(theme_bw() +
                     axis.text = element_text(size = 12),
                     axis.title = element_text(size = 14,
                                               face = 'bold'),
+                    legend.title = element_text(size = 12,
+                                                face = 'bold'),
                     strip.text = element_text(size = 12,
                                               face = 'bold')
                      )
 )
+
+## Below is trying to adapt to Nature Methods guidance, but hard to reproduce
+## across figs.  Need to read more about how others do this. 
+# theme_set(theme_bw() +
+#                theme(
+#                     axis.ticks = element_line(size = 0.25),
+#                     axis.title = element_text(size = 7,
+#                                               face = 'bold'),
+#                     legend.key.size = unit(2.5, units = 'mm'),
+#                     legend.title = element_text(size = 6, 
+#                                                 face = 'bold'),
+#                     text = element_text(size = 5),
+#                     panel.grid.major = element_line(size = 0.25),
+#                     panel.grid.minor = element_line(size = 0.125),
+#                     strip.text = element_text(face = 'bold')
+#                      )
+# )
 ```
 
 
@@ -54,7 +72,7 @@ rare.df <-
      here('data', 
           'processed', 
           'rarefaction',
-          'Rarefied trnL counts (1,000 reads).rds') %>% 
+          'Rarefied trnL counts.rds') %>% 
      readRDS
 
 rare.df
@@ -62,12 +80,15 @@ rare.df
 
 # Pre-process
 
+## trnL
+
 ```{r}
-# Intentionally *not* removing samples with 0 reads here
+# Filter to Adolescent cohort only
 ps <- 
      ps %>% 
      subset_samples(study == 'Adolescent') %>% 
-     prune_taxa(taxa_sums(.) > 0 , .)
+     # prune_samples(sample_sums(.) > 0, .) %>% 
+     prune_taxa(taxa_sums(.) > 0, .)
 
 ps
 ```
@@ -75,48 +96,32 @@ ps
 ```{r}
 alpha <- 
      rare.df %>% 
-     filter(study == 'Adolescent') %>% 
-     select(name, study, subj, R24_id:o, starts_with('obs'))
+     filter(grepl(name, pattern = 'POMMS') )
 ```
 
 ```{r}
-# Add in full set of observations, including samples with fewer than read count threshold
-asvtab <- data.frame(ps@otu_table@.Data)
-obs <- apply(asvtab, 1, function(x){sum(x > 0)})
-
-add <- 
-     data.frame(obs = obs) %>% 
-     rownames_to_column(var = 'name')
+# Add in sample metadata
 
 # Populate with sample data
 add <- 
-     data.frame(ps@sam_data) %>% 
+     ps@sam_data %>%
+     data.frame() %>% 
      rownames_to_column(var = 'row') %>% 
-     select(row, study, subj, R24_id, visit, o) %>% 
-     right_join(add, by = c('row' = 'name')) %>% 
-     rename(name = row)
+     select(row, study) 
 
 alpha <- 
-     add %>% 
-     filter(!(name %in% alpha$name)) %>% 
-     bind_rows(alpha)
+    left_join(add, alpha,
+              by = c('row' = 'name'))
 ```
 
-POMMS-70 doesn't have a rarefied observation, should figure out why.
-
-```{r}
-# Recode NAs in rarefied data as 0 observations
-alpha$obs_rare[is.na(alpha$obs_rare)] <- 0 
-```
-
-
-## Bind to demographic data
+## Demographic data
 
 ```{r}
 samdf <- 
      ps@sam_data %>% 
      data.frame() %>% 
      rownames_to_column(var = 'row') %>% 
+     filter(study == 'Adolescent') %>% 
      select(row:reads_tot, R24_id:reads_food)  # Adolescent metadata
 ```
 
@@ -188,6 +193,69 @@ samdf %>%
 hist(samdf$zbmi)
 ```
 
+May want to consider different breakpoints here to test nuance to case-control finding (e.g. adding Case (low); Case (med); Case (high)) based on breakpoints in the below plot.
+
+```{r}
+samdf %>% 
+     filter(casecontrol == 'Case' & timepoint == 'Entry') %>%
+     ggplot(aes(x = zbmi)) +
+     geom_histogram()
+```
+
+```{r}
+# Note that many BMI entries missing (all? at 6 months)
+samdf %>% 
+     group_by(timepoint) %>% 
+     summarize(n_missing = sum(is.na(zbmi)))
+```
+```{r}
+# Try this recoding
+samdf <- 
+     samdf %>% 
+     mutate(zbmi_case = ifelse(casecontrol == 'Case',
+                               yes = zbmi,
+                               no = 0), 
+            # Label controls as 0 for cut, below
+            casecontrol_detail = 
+                 cut(zbmi_case, 
+                     breaks = c(-0.1, 1.5, 2.0, 2.5, 4.0), 
+                     right = FALSE, 
+                     labels = c('Control',
+                                'Case (zBMI < 2.0)', 
+                                'Case (2.0 <= zBMI < 2.5)', 
+                                'Case (zBMI > 2.5)')) %>% 
+                 factor(exclude = NULL))
+
+samdf %>% select(subj, 
+                 starts_with('case'), 
+                 starts_with('zbmi'))
+```
+```{r}
+samdf %>% 
+     group_by(casecontrol_detail) %>% 
+     count()
+```
+
+```{r}
+samdf %>% 
+     group_by(tanner) %>% 
+     count()
+```
+
+```{r}
+# Only 5 missing. Recode as "Unknown"
+samdf <- 
+     samdf %>% 
+     mutate(tanner = ifelse(is.na(tanner),
+                            yes = 'Unknown',
+                            no = tanner),
+            tanner = factor(tanner,
+                            levels = c('2', '3', '4', '5', 
+                                       'Unknown')))
+
+```
+
+#### SES indicators
 
 ```{r}
 samdf %>% 
@@ -197,6 +265,70 @@ samdf %>%
      group_by(ses) %>% 
      count()
 ```
+```{r}
+# Make an over/under 100k category
+# (The poverty threshold for a 2-person family would be closer to 50k)
+samdf <- mutate(samdf, ses_over100k = (ses == '>100,000'))
+```
+
+```{r}
+samdf %>% 
+     group_by(ses_over100k) %>% 
+     count()
+```
+
+```{r}
+# Make "any" category for worry/actual insecurity
+samdf <- 
+     mutate(
+          samdf,
+          across(.cols = c(worry, actual),
+                 .fns = ~ ifelse(.x != 'Never true',
+                                 yes = 'Yes',
+                                 no = 'No'),
+                 .names = '{.col}_ever'
+                 )
+     )
+```
+
+```{r}
+samdf %>% 
+     group_by(subj, worry_ever) %>% 
+     count() %>% 
+     ungroup() %>% 
+     group_by(worry_ever) %>% 
+     count()
+```
+```{r}
+samdf %>% 
+     group_by(subj, actual_ever) %>% 
+     count() %>% 
+     ungroup() %>% 
+     group_by(actual_ever) %>% 
+     count()
+```
+
+```{r}
+# Make a joint category for any positive response to a food insecurity question
+samdf <- 
+     samdf %>% 
+     mutate(insecurity_any = 
+                 ifelse(worry_ever == 'Yes' | actual_ever == 'Yes',
+                        yes = 'Yes',
+                        no = 'No'))
+```
+
+```{r}
+# Recode NA as Unknown so these aren't discarded from the model
+samdf$ses[is.na(samdf$ses)] <- 'Unknown'
+samdf$ses_over100k[is.na(samdf$ses_over100k)] <- 'Unknown'
+samdf$worry_ever[is.na(samdf$worry_ever)] <- 'Unknown'
+samdf$actual_ever[is.na(samdf$actual_ever)] <- 'Unknown'
+samdf$insecurity_any[is.na(samdf$insecurity_any)] <- 'Unknown'
+```
+
+#### Age
+
 ```{r}
 # Age into quartiles by year, as in POMMS group analysis
 samdf <- 
@@ -212,7 +344,99 @@ samdf %>%
      group_by(age_q) %>% 
      count()
 ```
-How come some of these are incomplete? Will need to address.
+
+If age not available from one of the samples, take it from another:
+
+```{r}
+correction <- 
+     samdf %>% 
+     group_by(subj) %>% 
+     summarize(n_age_q = n_distinct(age_q)) %>% 
+     filter(n_age_q == 2)
+
+samdf %>% 
+     filter(subj %in% correction$subj) %>% 
+     select(subj, starts_with('age')) %>% 
+     arrange(subj)
+```
+Okay, so some of these are appropriately when the participant's age has changed.  We want to just keep those that are NA. 
+
+```{r}
+# Get a list of subjects for which we'll replace one value with the other
+correction <- 
+     samdf %>% 
+     filter(subj %in% correction$subj) %>% 
+     select(subj, starts_with('age')) %>% 
+     group_by(subj) %>% 
+     summarize(na.present = any(is.na(age))) %>% 
+     filter(na.present == TRUE) %>% 
+     pull(subj)
+
+length(correction)
+```
+
+Awesome!! This is exactly the same as the number of missing values above.  
+
+```{r}
+samdf %>% 
+     filter(subj %in% correction) %>% 
+     select(subj, timepoint, starts_with('age')) %>% 
+     arrange(subj, desc(timepoint))
+```
+Manually inspected and for all of these it's the 6 month timepoint missing. So add half a year (183 d) to their age_days variable, then convert.
+
+```{r}
+correction.df <- 
+     samdf %>% 
+     filter(subj %in% correction) %>% 
+     filter(timepoint == 'Entry') %>% 
+     select(subj, timepoint, age_days) %>% 
+     mutate(timepoint = '6 months',
+            age_days_corr = age_days + 183) %>% 
+     select(subj, timepoint, ends_with('corr'))
+
+correction.df
+```
+```{r}
+# Bind to sample data and replace values if needed
+samdf <- 
+     samdf %>% 
+     select(-age) %>% 
+     left_join(correction.df) %>% 
+     mutate(age_days = 
+                 ifelse(is.na(age_days),
+                        yes = age_days_corr,
+                        no = age_days)) 
+
+# Peek at results
+samdf %>% 
+     filter(subj %in% correction.df$subj) %>% 
+     select(subj, starts_with('age')) %>% 
+     arrange(subj)
+
+# Now, can drop corrected column, recalculate 
+samdf <- 
+     samdf %>% 
+     select(-age_days_corr) %>% 
+          mutate(age_years = floor(age_days/365),
+            age_q = cut(age_years,
+                        breaks = 4))
+```
+
+```{r}
+# Any missing now? 
+samdf %>% 
+     group_by(subj, age_q) %>% 
+     count() %>% 
+     ungroup() %>% 
+     group_by(age_q) %>% 
+     count()
+```
+
+```{r}
+# Convert to 10s of years for better visualization
+samdf$age_decades <- samdf$age_days/365/10 
+```
 
 #### Set reference
 
@@ -261,6 +485,15 @@ levels(samdf$casecontrol)
 ```
 
 ```{r}
+levels(samdf$casecontrol_detail)
+```
+
+```{r}
+levels(samdf$tanner)
+```
+
+
+```{r}
 class(samdf$ses)
 
 samdf$ses <- 
@@ -269,11 +502,33 @@ samdf$ses <-
                        '25,000-49,999',
                        '50,000-74,999',
                        '75,000-99,999',
-                       '>100,000')) %>% 
-     as.ordered()
-
-
+                       '>100,000',
+                       'Unknown')) 
 levels(samdf$ses)
+```
+
+```{r}
+class(samdf$worry_ever)
+
+samdf$worry_ever <- 
+     factor(samdf$worry_ever,
+            levels = c('No',
+                       'Yes',
+                       'Unknown')) 
+
+levels(samdf$worry_ever)
+```
+
+```{r}
+class(samdf$actual_ever)
+
+samdf$actual_ever <- 
+     factor(samdf$actual_ever,
+            levels = c('No',
+                       'Yes',
+                       'Unknown')) 
+
+levels(samdf$actual_ever)
 ```
 
 ### Metabolites
@@ -319,50 +574,488 @@ metabs <- c(metabs,
             'Orn',
             'Cit',
             'Arg')
+
+# All targeted metabolites, to be used downstream
+targeted.panel <- 
+     samdf %>% 
+     select(KIV:X3.HIB) %>% 
+     names()
 ```
 
 ```{r}
 # Pull from sample data, and join to results
 alpha <- 
      samdf %>% 
-     select(name = row, 
+     select(row, 
             subj,
-            casecontrol, 
+            starts_with('casecontrol'), 
             timepoint,
             starts_with('age'), # Want flexibility in choosing here
             sex,
+            tanner,
             race,
             ethnicity,
+            bmi,
             zbmi, 
-            ses,
+            starts_with('ses'),
+            worry_ever,
+            actual_ever,
+            insecurity_any,
             one_of(metabs)) %>% 
      right_join(alpha)
 
 alpha
 ```
-# Analyze
-
-Need to think about-- should I be handling two timepoints?  I think best to just start with 1 here. 
-
-I could include a subject effect, which would handle, right?
 
 ```{r}
-dim(alpha)
-# alpha <-
-#      alpha %>%
-#      filter(timepoint == 'Entry')
+# Make a raw version to make this easier to work with below
+alpha.raw <- 
+     alpha %>% 
+     select(-c(threshold, obs_rare, se)) %>% 
+     distinct() 
 
-dim(alpha)
+dim(alpha.raw)
 ```
 
-## Response variable distribution
+# Analyze
 
-How about just visualizing data to start?
+```{r}
+alpha %>% 
+     summarize(med = median(obs),
+               mad = mad(obs))
+```
+## Model: pMR response
+
+### Structure for saving model output
+
+```{r}
+# Idea here: make a sandbox for saving models
+results.df <- 
+     data.frame(n = NULL,
+                f = NULL,
+                mixed = NULL,
+                coeff = NULL,
+                beta = NULL,
+                p = NULL)
+```
+
+```{r}
+# Then maybe a function for pulling model output and adding to dataframe
+add_to_df <- function(results, f, mod.summary){
+     # Create new rows to bind to results
+     
+     # Variables that will be the same across all covariates
+     row.start <- 
+          data.frame(n = ifelse(is.infinite(max(results$n)),
+                                yes = 1,
+                                no = max(results$n) + 1),
+                     f = f, 
+                     mixed = ifelse(is.null(mod.summary$isLmer),
+                                    yes = FALSE,
+                                    no = mod.summary$isLmer))
+     
+     
+     # Covariate beta and p values
+     covars <- 
+          mod.summary$coefficients %>% 
+          data.frame() %>% 
+          rownames_to_column(var = 'coeff') %>% 
+          select(coeff,
+                 beta = Estimate,
+                 p = starts_with())
+     
+     results <- 
+          bind_cols(row.start,
+                    covars) %>% 
+          bind_rows(results, .)
+     
+     results
+}
+```
+
+### Linear model
+
+```{r}
+alpha.subset <- 
+     alpha %>% 
+     # filter(reads_food > 0) %>%
+     # filter(threshold == 1000 & !is.na(obs_rare)) %>%
+     select(-c(obs_rare, threshold, se)) %>% 
+     distinct() %>% 
+     # mutate(obs = ifelse(obs == 0,
+     #                     yes = 1, no = obs)) %>% 
+     filter(timepoint == 'Entry') 
+
+dim(alpha.subset)
+```
+
+```{r}
+descdist(alpha$obs, discrete = TRUE, boot = 500)
+```
+
+
+```{r}
+# Check distribution
+ggplot(alpha.subset, aes(x = obs)) +
+     geom_histogram(binwidth = 2,
+                    boundary = 0) +
+     labs(x = 'pMR\n', y = 'Frequency') +
+     theme(panel.grid.minor = element_blank())
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            '4',
+            paste0(plotID, '_pMR response variable histogram.pdf')),
+       height = 3, width = 3)
+```
+
+```{r}
+# QQ plot
+qqnorm(alpha.subset$obs, pch = 1, frame = FALSE)
+qqline(alpha.subset$obs, col = "steelblue", lwd = 2)
+```
+
+```{r}
+# Mixed model
+# f = "obs ~ age_years + sex + race + ethnicity + casecontrol + zbmi + ses + (1|subj)"
+# model <- lmer(f,
+#               data = alpha.subset)
+
+f = "obs ~ age_decades + sex + race + ethnicity + casecontrol + ses + actual_ever"
+
+model <- lm(f,
+            data = alpha.subset)
+
+summary(model)
+```
+
+###### Plot betas
+
+```{r}
+# Get confidence intervals
+cis <- 
+     confint(model) %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'covar') 
+
+# Get beta hat and p from model
+betas <- 
+     summary(model)$coeff[, c(1, 4)] %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'covar') 
+
+betas <- 
+     full_join(betas, cis) %>% 
+     rename(p = Pr...t..,
+            CI2.5 = X2.5..,
+            CI97.5 = X97.5..)
+
+betas
+rm(cis)
+```
+
+```{r}
+# Assign covariate grouping
+betas$group <- NULL
+betas$group[grepl(pattern = 'age|race|sex|ethnicity',
+                  betas$covar)] <- 'Demographic'
+betas$group[grepl(pattern = 'case',
+                  betas$covar)] <- 'Clinical'
+betas$group[grepl(pattern = 'ses|ever',
+                  betas$covar)] <- 'Socioeconomic'
+
+betas$group <- factor(betas$group,
+                      levels = c('Socioeconomic',
+                                 'Clinical',
+                                 'Demographic'))
+```
+
+```{r}
+# Refactor by values of Estimate
+betas <- 
+     betas %>% 
+     arrange(group, covar)
+```
+
+```{r}
+# Recode names for more interpretable plot
+betas$covar <- 
+     factor(betas$covar,
+            levels = c('actual_everUnknown',
+                       'actual_everYes',
+                       'sesUnknown',
+                       'ses>100,000',
+                       'ses75,000-99,999',
+                       'ses50,000-74,999',
+                       'ses25,000-49,999',
+                       'casecontrolCase',
+                       'ethnicityHI',
+                       'raceMultiple',
+                       'raceAS',
+                       'raceBL',
+                       'sexF',
+                       'age_decades',
+                       '(Intercept)'),
+            labels = c('foodinsecUnknown',
+                       'foodinsecYes',
+                       'incomeUnknown',
+                       'income>100K',
+                       'income75-99K',
+                       'income50-74K',
+                       'income25-49K',
+                       'casecontrolCase',
+                       'ethnicityHispanic',
+                       'raceMultiple',
+                       'raceAsian',
+                       'raceBlack',
+                       'sexFemale',
+                       'ageDecades',
+                       '(Intercept)'))
+```
+
+```{r}
+# Recode p value as significant, trend, n.s.
+betas$p_cat <- 
+     cut(betas$p,
+         breaks = c(0, 0.05, 0.10, 1),
+         labels = c('Significant',
+                    'Trend',
+                    'Not significant')) 
+```
+
+```{r}
+# Plots in style of Yap et al
+betas %>% 
+     filter(covar != "(Intercept)") %>% # Exclude intercept
+     # Exclude Unknown covariate categories (missing data)
+     filter(!grepl(pattern = 'Unknown', covar)) %>% 
+     ggplot(aes(x = covar, y = Estimate, color = p<=0.05)) +
+     geom_hline(yintercept = 0,
+                linetype = 'dotted',
+                color = '#E15759') +
+     geom_point(size = 2) +
+     geom_linerange(aes(ymin = CI2.5, 
+                       ymax = CI97.5,
+                       color = p<=0.05),
+                    size = 1) +
+     scale_color_manual(values = c('gray40', 'black')) +
+     labs(x = 'Covariate', y = 'Regression\ncoefficient') +
+     coord_flip() +
+     theme(legend.position = 'none')
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            '4',
+            paste0(plotID, '_pMR ~ demographics betas.pdf')),
+       height = 3, width = 5)
+```
+
+###### Fit
+```{r}
+fits <- 
+     # data.frame(y = model@resp$y, # For lmer() output
+     data.frame(y = model$model$obs,
+                y_hat = fitted(model),
+                resid = residuals(model))
+```
+
+```{r}
+ggplot(fits, aes(x = y, y = y_hat)) +
+     geom_point() +
+     geom_abline(slope = 1,
+                 intercept = 0,
+                 color = 'gray80') +
+     labs(x = 'pMR (actual)', y = 'pMR (fitted)') +
+     scale_y_continuous(breaks = seq(0, 20, 5),
+                        limits = c(0, 22)) +
+     coord_equal()
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'adolescent',
+            paste0(plotID, '_pMR ~ demographics fitted v. actual, lmer with zeros and missing data removed.pdf')),
+       height = 4, width = 4)
+```
+
+```{r}
+ggplot(fits, aes(x = y_hat, y = resid)) +
+     geom_point() +
+     geom_hline(yintercept = 0,
+                linetype = 'dashed',
+                color = 'red') +
+     labs(x = 'pMR (fitted)', y = 'Residuals') +
+     coord_equal()
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript', 
+            'supplemental',
+            'adolescent',
+            paste0(plotID, '_Residuals versus pMR fits, lmer with zeros and missing data removed.pdf')),
+       height = 4, width = 4)
+```
+
+Perhaps re: Justin's outliers point, it would be good to visually inspect the outliers in the dataset.  What ASVs make them up-- do they seem plausible?
+
+```{r}
+car::vif(model)
+```
+
+### GLM
+
+Tried this:
+- with all data as a negative binomial GLMM; didn't converge (think because so few measurements per subject): see here https://stackoverflow.com/questions/53034261/warning-lme4-model-failed-to-converge-with-maxgrad
+- used only entry timepoints, and as a negative binomial GLM
+
+#### Negative binomial
+
+```{r}
+# Using alpha.subset and f from above
+model <- 
+     glm.nb(f, 
+            data = alpha.subset)
+
+summary(model)
+```
+
+```{r}
+# Get confidence intervals
+cis <- 
+     confint(model) %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'covar') 
+
+# Get beta hat and p from model
+betas <- 
+     summary(model)$coeff[, c(1, 4)] %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'covar') 
+
+betas <- 
+     full_join(betas, cis) %>% 
+     rename(p = Pr...z..,
+            CI2.5 = X2.5..,
+            CI97.5 = X97.5..)
+
+betas
+rm(cis)
+```
+
+```{r}
+# Assign covariate grouping
+betas$group <- NULL
+betas$group[grepl(pattern = 'age|race|sex|ethnicity',
+                  betas$covar)] <- 'Demographic'
+betas$group[grepl(pattern = 'case',
+                  betas$covar)] <- 'Clinical'
+betas$group[grepl(pattern = 'ses|ever',
+                  betas$covar)] <- 'Socioeconomic'
+
+betas$group <- factor(betas$group,
+                      levels = c('Socioeconomic',
+                                 'Clinical',
+                                 'Demographic'))
+```
+
+```{r}
+# Refactor by values of Estimate
+betas <- 
+     betas %>% 
+     arrange(group, Estimate)
+
+betas$covar <- factor(betas$covar,
+                         levels = betas$covar)
+```
+
+```{r}
+# Plots in style of Yap et al
+betas %>% 
+     filter(covar != "(Intercept)") %>% # Exclude intercept
+     # Exclude Unknown covariate categories (missing data)
+     filter(!grepl(pattern = 'Unknown', covar)) %>% 
+     ggplot(aes(x = covar, y = Estimate, color = p<=0.05)) +
+     # geom_rect(xmin = ) + 
+     geom_hline(yintercept = 0,
+                linetype = 'dotted',
+                color = '#E15759') +
+     geom_point() +
+     geom_linerange(aes(ymin = CI2.5, 
+                       ymax = CI97.5,
+                       color = p<=0.05)) +
+     scale_color_manual(values = c('gray40', 'black')) +
+     labs(x = 'Covariate', y = 'Regression\ncoefficient') +
+     coord_flip() +
+     theme(legend.position = 'none')
+```
+
+```{r}
+fits <- 
+     data.frame(y = model$y,
+                y_hat = fitted(model),
+                resid = residuals(model))
+```
+
+```{r}
+ggplot(fits, aes(x = y, y = y_hat)) +
+     geom_abline(slope = 1, intercept = 0) +
+     geom_point() +
+     labs(x = 'pMR (actual)', y = 'pMR (fitted)') +
+     ylim(0, 28) + xlim(0, 28)
+```
+```{r}
+ggplot(fits, aes(x = y_hat, y = resid)) +
+     geom_point() +
+     geom_hline(yintercept = 0,
+                linetype = 'dashed',
+                color = 'red') +
+     labs(x = 'pMR (fitted)', y = 'Residuals') +
+     coord_equal()
+```
+
+Hmmm. This residual structure is better but the model is hardly predictive. 
+
+### Compare beta estimates
+
+```{r}
+ggplot(results.df, aes(x = n, y = beta, color = p <= 0.05)) +
+     geom_point() +
+     facet_wrap(~coeff,
+                scales = 'free_y') +
+     scale_color_manual(values = c('gray80', '#59A14F'))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'linear models', 
+            paste0(plotID, '_betas, models 1-9.pdf')),
+       height = 4, width = 10)
+```
+
+### Visualize raw relationships
+
+```{r}
+
+```
+
+
+## Model: pMR predictor
 
 ```{r}
 # Log transform metabolites
-alpha <- 
-     alpha %>% 
+alpha.raw <- 
+     alpha.raw %>% 
      mutate(across(one_of(metabs),
                    ~log(.x),
                    .names = '{.col}_log')) %>% 
@@ -373,9 +1066,26 @@ alpha <-
                            no = .x)))
 ```
 
+## Structure of metabolite data
+
+```{r}
+# Get in simple form: only metabolite variables
+# No duplicated rows
+
+dim(alpha.raw)
+metab.df <- 
+     alpha.raw %>% 
+     select(name,
+            one_of(metabs),
+            ends_with('_log'))
+
+dim(metab.df)
+```
+
+##### Distribution
 ```{r}
 # Raw data
-pivot_longer(alpha,
+pivot_longer(metab.df,
              one_of(metabs),
              names_to = 'metabolite',
              values_to = 'value') %>% 
@@ -403,10 +1113,10 @@ ggsave(here('results',
 
 ```{r}
 # Logged
-pivot_longer(alpha,
-                  ends_with('log'),
-                  names_to = 'metabolite',
-                  values_to = 'value') %>% 
+pivot_longer(metab.df,
+             ends_with('log'),
+             names_to = 'metabolite',
+             values_to = 'value') %>% 
      ggplot(aes(x = value)) +
      geom_histogram() +
      # ggplot(aes(x = obs, y = value)) +
@@ -430,48 +1140,203 @@ ggsave(here('results',
        height = 6, width = 6)
 ```
 
-
 ```{r}
 # Do any have negative values?
-alpha %>% 
+metab.df %>% 
      select(one_of(metabs)) %>% 
      apply(2, function(x){range(x, na.rm = TRUE)})
 ```
 
 ```{r}
 # How often do NAs occur?
-alpha %>% 
+metab.df %>% 
      select(one_of(metabs)) %>% 
      apply(2, function(x){sum(is.na(x))})
 ```
 
 These differ by individual, so don't want to remove them en masse.
 
-## GLM parameters
+##### Cross-correlation
+
+Can also make these plots using ggplot's geom_tile
+
+```{r}
+# 24 metabolites in all
+length(metabs)
+```
+
+```{r}
+# Make heatmap of correlations between them
+cor.raw <- 
+     metab.df %>% 
+     select(all_of(metabs)) %>% 
+     as.matrix() %>% 
+     cor(use = 'na.or.complete',
+         method = 'spearman')
+
+data.frame(cor.raw)
+```
+```{r}
+# Heatmap
+corrplot(cor.raw, 
+         order = "hclust", 
+         method = "circle")
+```
+
+```{r}
+# Make heatmap of correlations between them
+cor.log <- 
+     metab.df %>% 
+     select(ends_with('log')) %>% 
+     as.matrix() %>% 
+     cor(use = 'na.or.complete',
+         method = 'spearman')
+
+data.frame(cor.log)
+```
+```{r}
+# Heatmap
+
+corrplot(cor.log, 
+         order = "hclust", 
+         method = "circle")
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+pdf(here('results',
+            'manuscript',
+            'supplemental',
+            'adolescent',
+            paste0(plotID, '_Correlation between metabolites.pdf')),
+       height = 4, width = 4)
+```
+
+```{r}
+# Check serine, ornithine, proline based on results
+cor.log[c('Ser_log', 'Orn_log', 'Pro_log'),
+        c('Ser_log', 'Orn_log', 'Pro_log')]
+```
+
+```{r}
+hist(cor.log)
+```
+So these are on the upper end of what's typical. 
+
+##### Principal components (targeted metabolites)
+
+Another idea is to see if pMR is predictive of PC1, 2, ... from an ordination based on the serum targeted metabolites.
+
+Do an ordination:
+- Pull complete cases of targeted metabolite data
+- Center and scale
+- Do a PCA
+- Extract first n PCs and add them to dataframe for testing
+
+```{r}
+# Get all targeted metabolite columns
+targeted.df <- 
+     samdf %>% 
+     select(name = row, 
+            one_of(targeted.panel))
+
+dim(targeted.df)
+```
+
+```{r}
+# Get complete cases
+targeted.df <- targeted.df[complete.cases(targeted.df), ]
+dim(targeted.df)
+```
+
+```{r}
+# PCA
+pca <- 
+     targeted.df %>% 
+     remove_rownames() %>% 
+     column_to_rownames(var = 'name') %>% 
+     as.matrix() %>% 
+     prcomp(center = TRUE,
+            scale = TRUE)
+```
+
+```{r}
+# Pull coordinates, join to pMR data
+pca.df <- 
+     pca$x %>% 
+     data.frame() %>% 
+     rownames_to_column(var = 'name') %>% 
+     left_join(select(alpha.raw, name, obs)) %>% 
+     select(name, obs, everything())
+```
+
+```{r}
+# Percent of variance explained for plot labels
+percentage <- round(pca$sdev^2 / sum(pca$sdev^2) * 100, 2)
+percentage <- paste(colnames(pca$x), 
+                    paste0('(', as.character(percentage), "%", ")", sep="") )
+```
+
+```{r}
+color.scheme <- 
+     RColorBrewer::brewer.pal(n = 8, name = 'RdBu') %>% 
+     rev()
+
+# Plot
+ggplot(pca.df, aes(x = PC1, y = PC2, color = obs)) +
+     geom_point(alpha = 0.9) +
+     coord_equal() +
+     scale_color_gradientn(colors = color.scheme) +
+     labs(x = percentage[1], y = percentage[2], color = 'pMR') +
+     theme(panel.grid = element_blank())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results',
+#             'manuscript',
+#             'supplemental',
+#             'adolescent',
+#             paste0(plotID, '_PCA on serum metabolites.pdf')),
+#        device = cairo_pdf, 
+#        height = 4, width = 4)
+```
+
+```{r}
+set.seed(20220202)
+# Try a PERMANOVA with pMR
+vegan::adonis(dist(pca$x, method = 'euclidean') ~ obs, 
+              data = pca.df)
+```
+
+```{r}
+# Pull first PC for inclusion given large gap from % variance explained by
+# remainder
+head(percentage)
+```
+
+```{r}
+alpha.raw <- 
+     pca.df %>% 
+     select(name, PC1) %>% 
+     right_join(alpha.raw)
+```
+
+## Linear model
+
+TODO:
+get R2 and p for each nominally significant pMR-metabolite relationship to label plot
 
 Check a few above to establish distribution and link function.
 ```{r}
-alpha.filt <- filter(alpha, !is.na(alt))
+alpha.filt <- filter(alpha.raw, !is.na(Ser_log))
 ```
 
 ```{r}
 # Create a skewness-kurtosis plot to find the best distribution for data
-descdist(alpha.filt$alt, discrete = FALSE, boot = 500)
+descdist(alpha.filt$Ser_log, discrete = FALSE, boot = 500)
 ```
-```{r}
-# Fit  data to a variety of distributions to double check above results. 
-fit.norm <- fitdist(alpha.filt$alt, "norm")
-fit.lognorm <- fitdist(alpha.filt$alt, "lnorm")
-fit.gamma <- fitdist(alpha.filt$alt, "gamma")
-```
-
-```{r}
-plot(fit.norm)
-```
-
-```{r}
-plot(fit.gamma)
-```
+Ok, confirming what we saw above that things look normal. 
 
 Following what I think is Nathan Bilmeyer's code from [POMMS github repository](https://github.com/POMMS/methods_baseline_insights/blob/master/2_statistical_analysis_and_figures/Fig3_and_Supplement_script.R):
 
@@ -486,23 +1351,47 @@ metabs
 ```
 
 ```{r}
-formula     = "`%s` ~ obs + age_years + sex + race + ethnicity + casecontrol"
+# Add PC1 from above
+metabs <- c(metabs, 'PC1')
+```
 
-results     = data.frame(Metabolite=NA, Number=1, Beta=1, SE=1, Tval=1, Pval=1)
+```{r}
+# Only consider entry timepoint for simplicity
+alpha.subset <- 
+     alpha.raw %>% 
+     filter(timepoint == 'Entry')
+```
+
+```{r}
+f1     = "`%s` ~ obs" # Unadjusted model
+f2     = "`%s` ~ obs + age_years + sex + race + ethnicity + casecontrol" # Adjusted model
+
+results     = data.frame(f = NA,
+                         Metabolite=NA, 
+                         Number=1, 
+                         Beta=1, 
+                         SE=1, 
+                         Tval=1, 
+                         Pval=1)
 
 for(metab in metabs) {
-	f             = sprintf(formula, metab)
-	model         = tryCatch(glm(f, data=alpha, 
-	                             family = gaussian()),
-	                         error=function(e) { NA })
-	n             = tryCatch(nobs(model),                           
-	                         error=function(e) { NA })
-	s             = tryCatch(summary(model)$coef[2,],               
-	                         error=function(e) { rep(NA, 4) })
-	results       = rbind(results, c(metab, n, s))
+     for (formula in c(f1, f2)){
+          f         = sprintf(formula, metab)
+          model     = tryCatch(glm(f, data=alpha.subset, 
+                                       family = gaussian()),
+                                   error=function(e) { NA })
+          n         = tryCatch(nobs(model),                      
+                                   error=function(e) { NA })
+          s         = tryCatch(summary(model)$coef[2,],          
+                                   error=function(e) { rep(NA, 4) })
+          results   = rbind(results, c(formula, metab, n, s))
+     }
 }
 
 results          = results[-1,]
+results$f  = factor(results$f,
+                          levels = c(f1, f2),
+                          labels = c('Unadjusted', 'Adjusted'))
 results$Number   = as.numeric(results$Number)
 results$Beta     = as.numeric(results$Beta)
 results$SE       = as.numeric(results$SE)
@@ -516,350 +1405,85 @@ results          = results[order(results$adj.Pval),]
 results
 ```
 ```{r}
-formula     = "`%s` ~ obs_rare + age_q + sex + race + ethnicity + casecontrol"
-
-results     = data.frame(Metabolite=NA, Number=1, Beta=1, SE=1, Tval=1, Pval=1)
-
-for(metab in metabs) {
-	f             = sprintf(formula, metab)
-	model         = tryCatch(glm(f, data=alpha, 
-	                             family=gaussian(link = 'log')),
-	                             # family = Gamma()),
-	                         error=function(e) { NA })
-	n             = tryCatch(nobs(model),                           
-	                         error=function(e) { NA })
-	s             = tryCatch(summary(model)$coef[2,],               
-	                         error=function(e) { rep(NA, 4) })
-	results       = rbind(results, c(metab, n, s))
-}
-
-results          = results[-1,]
-results$Number   = as.numeric(results$Number)
-results$Beta     = as.numeric(results$Beta)
-results$SE       = as.numeric(results$SE)
-results$Tval     = as.numeric(results$Tval)
-results$Pval     = as.numeric(results$Pval)
-results$adj.Pval = p.adjust(results$Pval, method="fdr")
-results          = results[order(results$adj.Pval),]
+# Get model fit for PC1 (last iteration above)
+summary(
+     lm(PC1 ~ obs + age_years + sex + race + ethnicity + casecontrol,
+        data = alpha.subset)
+)
 ```
 
-```{r}
-results
-```
-
-## Richness response variable
+Follow up on serine, ornithine, proline
 
 ```{r}
-# Check distribution
-alpha %>% 
-     select(-obs_rare_se) %>% 
-     pivot_longer(cols = starts_with('obs'),
-                  names_to = 'metric',
-                  values_to = 'value') %>% 
-     mutate(metric = factor(metric,
-                            levels = c('obs', 'obs_rare'),
-                            labels = c('pMR', 'Rarefied pMR'))) %>% 
-     ggplot(aes(x = value)) +
-     geom_histogram(binwidth = 2,
-                    boundary = 0) +
-     facet_wrap(~metric, nrow = 2) +
-     labs(x = 'Value', y = 'Count') +
-     theme(panel.grid.minor = element_blank())
-```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 
-            'manuscript', 
-            'supplemental',
-            'adolescent',
-            paste0(plotID, '_pMR response variable histogram (with zeros).pdf')),
-       height = 4, width = 2)
-```
-
-Sayan's steps:
-1. Try generic linear model
-     - without zeros
-     - turn zeros into ones
-     - exclude missing data
-     - impute missing data
-seeing if weirdness happens here also
-2. Try then as a GLM with appropriate fmaily and link.
-
-### Linear model
-
-```{r}
-sum(alpha$obs == 0)
-```
-
-##### Remove 0s, exclude missing data
-
-```{r}
-alpha.subset <- 
-     alpha %>% 
-     filter(obs != 0) %>% 
-     filter(!is.na(ses)) %>% 
-     filter(!is.na(age_years))
-
-dim(alpha.subset)
-```
-
-```{r}
-f1 = "obs ~ age_years + sex + race + ethnicity + casecontrol + zbmi + (1|subj)"
-f2 = "obs ~ age_years + sex + race + ethnicity + casecontrol + zbmi + ses + (1|subj)"
-
-model1 <- lmer(f1, 
-             data = alpha.subset) 
-
-model2 <- lmer(f2, 
-             data = alpha.subset) 
-
-summary(model1)
-```
-
-```{r}
-summary(model2)
-```
-
-###### Fit
-```{r}
-fits <- 
-     data.frame(model = 1,
-                y = model1@resp$y,
-                y_hat = fitted(model1),
-                resid = residuals(model1))
-
-fits <- 
-     data.frame(model = 2,
-                y = model2@resp$y,
-                y_hat = fitted(model2),
-                resid = residuals(model2)) %>% 
-     bind_rows(fits, .)
-```
-
-```{r}
-ggplot(fits, aes(x = y, y = y_hat)) +
+# Plot
+alpha.raw %>% 
+     select(obs, Ser_log, Orn_log, Pro_log) %>% 
+     pivot_longer(ends_with('log'),
+                  names_to = 'metabolite',
+                  values_to = 'value'
+     ) %>% 
+     ggplot(aes(x = obs, y = value)) + 
      geom_point() +
-     geom_abline(slope = 1,
-                 intercept = 0,
-                 color = 'gray80') +
-     facet_wrap(~model) +
-     labs(x = 'pMR (actual)', y = 'pMR (fitted)') +
-     scale_y_continuous(breaks = seq(0, 20, 5),
-                        limits = c(0, 22)) +
-     coord_equal()
+     geom_smooth(method = 'lm') +
+     facet_wrap(~metabolite,
+                scales = 'free_y')
+```
+
+```{r}
+# Can I simply show this as the raw value (not logged)?
+alpha.raw %>% 
+     select(obs, Ser, Orn, Pro, Arg) %>% 
+     pivot_longer(-obs,
+                  names_to = 'metabolite',
+                  values_to = 'value'
+     ) %>% 
+     mutate(metabolite = factor(metabolite,
+                                levels = c('Arg',
+                                           'Ser',
+                                           'Orn',
+                                           'Pro')),
+            significant = ifelse(metabolite == 'Arg',
+                                 yes = FALSE,
+                                 no = TRUE)) %>%  
+     ggplot(aes(x = obs, y = value)) + 
+     geom_point(alpha = 0.5) +
+     geom_smooth(aes(color = significant),
+                 method = 'lm') +
+     facet_wrap(~metabolite,
+                scales = 'free_y',
+                nrow = 1) +
+     labs(y = 'Metabolite concentration',
+          x = 'pMR') +
+     scale_color_manual(values = c('gray40', '#E15759')) +
+     theme(legend.position = 'none')
 ```
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 
-            'manuscript', 
-            'supplemental',
-            'adolescent',
-            paste0(plotID, '_pMR ~ demographics fitted v. actual, lmer with zeros and missing data removed.pdf')),
-       height = 4, width = 4)
+ggsave(here('results',
+            'manuscript',
+            '5',
+            paste0(plotID, '_serum metabolites.pdf')),
+       device = cairo_pdf, 
+       height = 3, width = 8)
 ```
 
 ```{r}
-ggplot(fits, aes(x = y_hat, y = resid)) +
-     geom_point() +
-     geom_hline(yintercept = 0,
-                linetype = 'dashed',
-                color = 'red') +
-     facet_wrap(~model) +
-     labs(x = 'pMR (fitted)', y = 'Residuals') +
-     coord_equal()
+# Model fits: serine
+
+f1     = "Ser_log ~ obs" # Unadjusted model
+f2     = "Ser_log ~ obs + age_years + sex + race + ethnicity + casecontrol" # Adjusted model
+
+m1 <- lm(f1, data = alpha.subset)
+summary(m1)
+```
+```{r}
+m2 <- lm(f2, data = alpha.subset)
+summary(m2)
 ```
 
 ```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 
-            'manuscript', 
-            'supplemental',
-            'adolescent',
-            paste0(plotID, '_Residuals versus pMR fits, lmer with zeros and missing data removed.pdf')),
-       height = 4, width = 4)
-```
-
-#### Replace 0 with 1s, remove missing data
-
-```{r}
-alpha.subset <- 
-     alpha %>% 
-     mutate(obs = ifelse(obs == 0,
-                         yes = 1,
-                         no = obs)) %>% 
-     filter(!is.na(ses)) %>% 
-     filter(!is.na(age_years))
-
-dim(alpha.subset)
-```
-
-```{r}
-f1 = "obs ~ age_years + sex + race + ethnicity + casecontrol + zbmi + (1|subj)"
-f2 = "obs ~ age_years + sex + race + ethnicity + casecontrol + zbmi + ses + (1|subj)"
-
-model1 <- lmer(f1, 
-             data = alpha.subset) 
-
-model2 <- lmer(f2, 
-             data = alpha.subset) 
-
-summary(model1)
-```
-
-```{r}
-summary(model2)
-```
-
-###### Fit
-```{r}
-fits <- 
-     data.frame(model = 1,
-                y = model1@resp$y,
-                y_hat = fitted(model1),
-                resid = residuals(model1))
-
-fits <- 
-     data.frame(model = 2,
-                y = model2@resp$y,
-                y_hat = fitted(model2),
-                resid = residuals(model2)) %>% 
-     bind_rows(fits, .)
-```
-
-```{r}
-ggplot(fits, aes(x = y, y = y_hat)) +
-     geom_point() +
-     geom_abline(slope = 1,
-                 intercept = 0,
-                 color = 'gray80') +
-     facet_wrap(~model) +
-     labs(x = 'pMR (actual)', y = 'pMR (fitted)') +
-     scale_y_continuous(breaks = seq(0, 20, 5),
-                        limits = c(0, 22)) +
-     coord_equal()
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 
-            'manuscript', 
-            'supplemental',
-            'adolescent',
-            paste0(plotID, '_pMR ~ demographics fitted v. actual, lmer with zeros and missing data removed.pdf')),
-       height = 4, width = 4)
-```
-
-```{r}
-ggplot(fits, aes(x = y_hat, y = resid)) +
-     geom_point() +
-     geom_hline(yintercept = 0,
-                linetype = 'dashed',
-                color = 'red') +
-     facet_wrap(~model) +
-     labs(x = 'pMR (fitted)', y = 'Residuals') +
-     coord_equal()
-```
-
-Perhaps re: Justin's outliers point, it would be good to visually inspect the outliers in the dataset.  What ASVs make them up-- do they seem plausible?
-
-#### Replace 0 with 1s, impute missing data
-
-```{r}
-alpha.subset <- 
-     alpha %>% 
-     mutate(obs = ifelse(obs == 0,
-                         yes = 1,
-                         no = obs)) 
-```
-
-#### Multicollinearity
-
-```{r}
-car::vif(model2)
-```
-
-
-#### Fit to data
-
-Plot fitted values against actual data-- how good is the model?
-
-```{r}
-fits <- 
-     data.frame(y = model2$y,
-                y_hat = model2$fitted.values,
-                resid = model2$residuals)
-```
-
-```{r}
-ggplot(fits, aes(x = y, y = y_hat)) +
-     geom_point() +
-     labs(x = 'pMR (actual)', y = 'pMR (fitted)') +
-     coord_equal()
-```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 
-            'manuscript', 
-            'supplemental',
-            'adolescent',
-            paste0(plotID, '_pMR ~ demographics fitted v. actual.pdf')),
-       height = 4, width = 4)
-```
-
-
-#### Residuals
-
-```{r}
-ggplot(fits, aes(x = y_hat, y = resid)) +
-     geom_point() +
-     geom_hline(yintercept = 0,
-                linetype = 'dashed',
-                color = 'red') +
-     labs(x = 'pMR (fitted)', y = 'Residuals') +
-     coord_equal()
-```
-```{r}
-ggsave(here('results', 
-            'manuscript', 
-            'supplemental',
-            'adolescent',
-            paste0(plotID, '_pMR ~ demographics residuals.pdf')),
-       height = 4, width = 8)
-```
-
-
-### GLM
-```{r}
-f = "obs ~ age_q + sex + race + ethnicity + casecontrol + zbmi + ses"
-model <- 
-     glm(f, 
-         data = alpha, 
-         family = Gamma())
-
-summary(model)
-```
-
-```{r}
-fits <- 
-     data.frame(y = model$y,
-                y_hat = model$fitted.values,
-                resid = model$residuals)
-```
-
-```{r}
-ggplot(fits, aes(x = y, y = y_hat)) +
-     geom_point() +
-     labs(x = 'Rarefied pMR (actual)', y = 'Rarefied pMR (fitted)') +
-     ylim(0, 21) + xlim(0, 21)
-```
-```{r}
-ggplot(fits, aes(x = y_hat, y = resid)) +
-     geom_point() +
-     geom_hline(yintercept = 0,
-                linetype = 'dashed',
-                color = 'red') +
-     labs(x = 'pMR (fitted)', y = 'Residuals') +
-     coord_equal()
+# Is adjusted model a better fit?
+anova(m1, m2)
 ```
 
