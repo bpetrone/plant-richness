@@ -172,6 +172,37 @@ tree
 rm(crops)
 ```
 
+#### Taxonomy
+
+Taxonomic information up to order level already present!! Clean up structure:
+
+```{r}
+# Filter to only those used as food
+crops <- 
+     metadata %>% 
+     filter(use_food == 1) %>% 
+     select(id, 
+            common_name_crop,
+            species_name,
+            species_name_,
+            order, 
+            family,
+            genus,
+            sps,
+            `FAO group code`) %>% 
+     mutate(species = paste(genus, sps)) %>% 
+     select(-sps)
+```
+
+```{r}
+# How many major crops? (Lines with an FAO group code entry?)
+crops %>% 
+     filter(!is.na(`FAO group code`)) %>% 
+     dim()
+```
+
+This was lower than I expected so I also tested as a join from raw FAO data with the same result (177).  So now, FAO group code is only present if the listed species is a major crop.
+
 ### Reference
 
 Organize in a taxonomy-table style.
@@ -202,7 +233,7 @@ db.df <-
 db.df$seq <- as.character(db)
 ```
 
-Steps for taxonomy: DON'T RUN RIGHT NOW
+#### Taxonomy
 
 ```{r}
 # Look up accession taxonomy with taxa package functions
@@ -212,7 +243,6 @@ taxmap <- metacoder::lookup_tax_data(db.df$accession,
 
 ```{r}
 # Make taxonomy table
-# Note may need to make changes to ranks below based on animal/plant db
 taxonomy <- 
      metacoder::taxonomy_table(taxmap, 
                           use_ranks = c('superkingdom', 
@@ -266,7 +296,6 @@ add.rows <-
      read_csv(col_types = cols(.default = 'c'))
 ```
 
-
 ```{r }
 # Bind together
 taxonomy <-
@@ -297,7 +326,65 @@ db.df <-
 any(is.na(db.df$species))
 ```
 
+```{r}
+# This is one accession for which look-up failed:
+filter(db.df, is.na(species))
+
+# Remove it, duplicate other Theobroma row and replace accession
+row <- filter(db.df, species == 'Theobroma cacao')
+row$accession <- 'KR864758.1'
+
+db.df <- 
+     db.df %>% 
+     filter(!is.na(species)) %>% 
+     bind_rows(row)
+```
+
 ### Integrate
+
+```{r}
+names(db.df)
+```
+
+```{r}
+names(crops)
+```
+
+```{r}
+intersect(names(db.df),
+          names(crops))
+```
+
+```{r}
+# Simplify the database input so we only have one line per included taxon
+nrow(db.df)
+
+db.df.join <- 
+     db.df %>% 
+     select(superkingdom:species) %>% # Leave off subspecies and variety information
+     mutate(in_ref = 1) %>% 
+     distinct() 
+
+nrow(db.df.join)
+```
+
+```{r}
+# Pre-join dimensions
+nrow(db.df.join)
+nrow(crops)
+```
+
+```{r}
+# Join on shared taxonomy columns
+combined.df <- 
+     full_join(db.df.join, crops) %>% 
+     # Add a label for membership in tree and major crop status
+     mutate(in_tree = !is.na(id),
+            major_crop = !is.na(`FAO group code`)) %>% 
+     select(-id)
+
+dim(combined.df)
+```
 
 #### Major crops in reference
 
@@ -306,35 +393,10 @@ any(is.na(db.df$species))
 Interestingly, from Milla et al. 2021 methods: "Before matching, the FAO Commodity List was checked for taxonomic accuracy and validity against The Plant List using function TPL of the Taxonstand package in R v.3.6.2. Commodity groups composed of a single crop species were automatically matched but most groups included several taxa. However, all groups but wheat were composed of a major contributor to agricultural production, together with congeneric minor crops. Therefore, production data were assigned to the major crop of each multispecific group. For wheat, we assigned 93% of production to bread wheat and 7% to durum. *The 112 crop species with a tracked record in FAOSTAT* were operationally coded as major crops and the remaining 754 crop species that were included in the Crop Origins database, but which lacked a FAOSTAT record, were considered as minor crops."
 
 ```{r}
-# Tip labels are already encoded in the variable 'species_name_'
-# Add major/minor crop data
-# First, format compatibly with tip labels
-fao.names <- 
-     fao.names %>% 
-     # Remove infraspecific labels
-     mutate(tip = gsub(pattern = 'var.*',
-                       replacement = '', 
-                       Species),
-            tip = gsub(pattern = 'subsp.*',
-                       replacement = '', 
-                       tip),
-            # Replace space with underscore
-            tip = gsub(tip, 
-                       pattern = ' ',
-                       replacement = '_')) 
-```
-
-```{r}
-# Join to metadata
-metadata <- 
-     left_join(metadata, fao.names,
-               by = c('species_name_' = 'tip'))
-```
-
-```{r}
 # Make a simplified version of this for major crop tally in visualization:
 major.crop <- 
      metadata %>% 
+     filter(use_food == 1) %>% 
      select(species_name_, # Tip labels in tree
             Species) %>%  # From FAO labeling
      distinct() %>% 
@@ -411,21 +473,18 @@ major.crop <-
 # And recode more subtle categories as a numeric scale for coloring plot
 
 # In both crop and reference: 1, dark green
-major.crop$major_crop[major.crop$agree] <- 1
 major.crop$in_ref[major.crop$agree] <- 1
 
 # In reference, but not a major crop: 2, light green
-major.crop$major_crop[major.crop$no_crop_yes_ref] <- 0
 major.crop$in_ref[major.crop$no_crop_yes_ref] <- 2
 
 # Major crop, but not in reference: 3, yellow/orange
 # Not a major crop, not in reference: 0, white
-major.crop$major_crop[major.crop$yes_crop_no_ref] <- 3
-major.crop$in_ref[major.crop$yes_crop_no_ref] <- 0
+major.crop$in_ref[major.crop$yes_crop_no_ref] <- 3
 
 # Convert to factor
 major.crop <- mutate(major.crop,
-                     across(c(major_crop, in_ref), factor))
+                     in_ref = factor(in_ref))
 ```
 
 ```{r}
@@ -433,7 +492,6 @@ major.crop <- mutate(major.crop,
 major.crop <- 
      column_to_rownames(major.crop, var = 'species_name_')
 ```
-
 
 # Statistics
 
@@ -443,6 +501,12 @@ How many distinct taxa?
 db.df %>% 
      select(name) %>% 
      n_distinct()
+```
+
+How many distinct species?
+
+```{r}
+n_distinct(db.df$species)
 ```
 
 How many total sequences? Had previously reported unique, but I don't think this makes sense.
@@ -457,6 +521,15 @@ Range of sequence lengths
 # Subtract length of primer sequences
 range(width(db)) - nchar('GGGCAATCCTGAGCCAA') - nchar('CCATTGAGTCTCTGCACCTATC')
 ```
+
+## % tree present in ref
+
+```{r}
+
+```
+
+
+## % tree detected from data
 
 # Visualize taxa
 
@@ -564,38 +637,37 @@ t <-
             # layout = 'circular') +
             layout = 'fan',
             open.angle = 20) +
-     scale_color_manual(values = overlay.colors) +
-     # geom_tiplab(size = 0.8) +
-     theme(legend.position = 'none') 
+     # geom_tiplab(size = 0.5) +
+     scale_color_manual(values = overlay.colors)
 
-rotate_tree(t, -20)
+t
 ```
-
-Hmm -- need to figure out how to preserve fan layout with addition of gheatmap data
-
 ```{r}
 # Now, try adding major/minor crop data in outer ring
-gheatmap(p = t,
+t.heatmap <- 
+     gheatmap(p = t,
               data = select(major.crop,
-                            major_crop,
                             in_ref),
          offset = 1,
-         width = 0.1,
+         width = 0.05,
          colnames = FALSE,
          color = NULL
      ) +
      # Traffic color scheme-- a bit busy
      scale_fill_manual(values = c('white',
-                                  '#309143', # Dark green
-                                  '#8ace7e', # Light green
-                                  'black')) + # Red (maybe gray??)
-     # Grayscale color scheme
-     # scale_fill_manual(values = c('white',
-     #                              'black',
-     #                              '#989ca3',
-     #                              '#ff684c')) +
-     theme(legend.position = 'none')
+                                  'black', 
+                                  '#989ca3', # 
+                                  '#ff684c')) + 
+     theme(legend.position = 'none') 
+
+t.heatmap
 ```
+
+```{r}
+open_tree(t.heatmap, 20) %>% 
+     rotate_tree(-20)
+```
+
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
@@ -645,7 +717,7 @@ test$expected
 ```
 
 ## Metacoder tree
-
+1
 ### Reference
 
 #### Full tree
