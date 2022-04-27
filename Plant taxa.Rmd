@@ -877,9 +877,11 @@ test$expected
 ## UpSet plot
 
 ```{r}
-# Update taxa names to their lowest specified level
-all(taxa_names(ps) == row.names(taxtab)) 
-taxa_names(ps) <- lowest_level(taxtab)$name
+taxtab <- 
+     ps@tax_table@.Data %>% 
+     data.frame()
+
+head(taxa_names(ps))
 ```
 
 ```{r}
@@ -931,6 +933,41 @@ union(weightloss.taxa, adult1.taxa) %>%
 146 - length(adult2.taxa)
 146 - length(adolescent.taxa)
 ```
+
+```{r}
+# Try dataframe structure for UpSet plot input
+input.df <- 
+     data.frame(taxon = taxa_names(ps)) %>% 
+     mutate(`Weight Loss` = taxon %in% weightloss.taxa,
+            `Adult-1` = taxon %in% adult1.taxa,
+            `Adult-2` = taxon %in% adult2.taxa,
+            `Adolescent` = taxon %in% adolescent.taxa
+            ) %>% 
+     mutate(across(.cols = -taxon,
+                   as.numeric))
+
+input.df
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+pdf(here('results',
+         'manuscript',
+         'supplemental',
+         paste0(plotID,
+                '_UpSet plot of trnL taxa.pdf')),
+    onefile = FALSE, # Remove blank page
+    height = 4, width = 6)
+
+upset(input.df,
+      sets = c('Adolescent', 'Adult-2', 'Adult-1', 'Weight Loss'),
+      keep.order = TRUE,
+      order.by = 'freq',
+      text.scale = 1.5,
+      mb.ratio = c(0.55, 0.45),
+      mainbar.y.label = 'Shared plants',
+      sets.x.label = 'Total plants') 
+```
+
 
 ```{r}
 # Summarize phyloseq by cohort
