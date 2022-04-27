@@ -113,16 +113,27 @@ dim(fao.names)
 
 ## trnL
 
-```{r}
-# First, remove name column from taxonomy, as not needed here
-taxtab <- 
-     ps@tax_table %>% 
-     data.frame() %>% 
-     select(-name)
+### Detected/not detected
 
-tax_table(ps) <- tax_table(as.matrix(taxtab))
+```{r}
+melt <- psmelt(ps)
 ```
 
+```{r}
+detections <- 
+     melt %>% 
+     group_by(superkingdom, 
+              kingdom, 
+              phylum,
+              order,
+              family, 
+              genus,
+              species) %>% # Only go to species, since this is what's in tree
+     summarize(abundance = sum(Abundance)) %>% 
+     mutate(in_data = abundance > 0)
+
+detections
+```
 ## Tree data
 
 ### CropOrigins
@@ -145,6 +156,24 @@ metadata %>%
      group_by(use_food) %>% 
      count()
 ```
+```{r}
+# Join to FAO names
+# Note that some of the corresponding species are duplicated: just pick the first entry for simplicity
+dim(fao.names)
+n_distinct(fao.names$Species)
+
+fao.names <- 
+     fao.names %>% 
+     group_by(Species) %>% 
+     summarize(across(everything(),
+                      first))
+
+# Now can join without introducing duplicates
+metadata <- 
+     left_join(metadata, fao.names,
+               by = c('species_name' = 'Species'))
+```
+
 ### PhyloFood
 
 ```{r}
@@ -192,6 +221,14 @@ crops <-
             `FAO group code`) %>% 
      mutate(species = paste(genus, sps)) %>% 
      select(-sps)
+```
+
+##### Manual corrections
+
+```{r}
+# Noticed in joins below
+# Chenopodiaceae labeled as Amaranthaceae for quinoa
+crops$family[crops$genus == 'Chenopodium'] <- 'Chenopodiaceae'
 ```
 
 ```{r}
@@ -328,16 +365,16 @@ any(is.na(db.df$species))
 
 ```{r}
 # This is one accession for which look-up failed:
-filter(db.df, is.na(species))
-
-# Remove it, duplicate other Theobroma row and replace accession
-row <- filter(db.df, species == 'Theobroma cacao')
-row$accession <- 'KR864758.1'
-
-db.df <- 
-     db.df %>% 
-     filter(!is.na(species)) %>% 
-     bind_rows(row)
+# filter(db.df, is.na(species))
+# 
+# # Remove it, duplicate other Theobroma row and replace accession
+# row <- filter(db.df, species == 'Theobroma cacao')
+# row$accession <- 'KR864758.1'
+# 
+# db.df <- 
+#      db.df %>% 
+#      filter(!is.na(species)) %>% 
+#      bind_rows(row)
 ```
 
 ### Integrate
@@ -351,8 +388,14 @@ names(crops)
 ```
 
 ```{r}
+names(detections)
+```
+
+
+```{r}
 intersect(names(db.df),
-          names(crops))
+          names(crops)) %>% 
+     intersect(names(detections))
 ```
 
 ```{r}
@@ -362,7 +405,7 @@ nrow(db.df)
 db.df.join <- 
      db.df %>% 
      select(superkingdom:species) %>% # Leave off subspecies and variety information
-     mutate(in_ref = 1) %>% 
+     mutate(in_ref = TRUE) %>% 
      distinct() 
 
 nrow(db.df.join)
@@ -372,6 +415,7 @@ nrow(db.df.join)
 # Pre-join dimensions
 nrow(db.df.join)
 nrow(crops)
+nrow(detections) # Though note duplications here due to NAs at genus or species level
 ```
 
 ```{r}
@@ -381,7 +425,8 @@ combined.df <-
      # Add a label for membership in tree and major crop status
      mutate(in_tree = !is.na(id),
             major_crop = !is.na(`FAO group code`)) %>% 
-     select(-id)
+     select(-id) %>% 
+     full_join(detections)
 
 dim(combined.df)
 ```
@@ -398,9 +443,8 @@ major.crop <-
      metadata %>% 
      filter(use_food == 1) %>% 
      select(species_name_, # Tip labels in tree
-            Species) %>%  # From FAO labeling
-     distinct() %>% 
-     mutate(major_crop = ifelse(!is.na(Species),
+            `FAO group code`) %>%  # From FAO labeling
+     mutate(major_crop = ifelse(!is.na(`FAO group code`),
                                 yes = TRUE,
                                 no = FALSE))
 ```
@@ -525,11 +569,125 @@ range(width(db)) - nchar('GGGCAATCCTGAGCCAA') - nchar('CCATTGAGTCTCTGCACCTATC')
 ## % tree present in ref
 
 ```{r}
-
+combined.df %>% 
+     select(family, 
+            in_ref,
+            in_tree) %>% 
+     group_by(family) %>% 
+     # Is that family represented by any sequence in the reference,
+     # or any branch on the tree?
+     summarize(across(starts_with('in_'),
+                   ~any(.x, na.rm = TRUE))) 
+```
+```{r}
+combined.df %>% 
+     select(family, 
+            in_ref,
+            in_tree) %>% 
+     group_by(family) %>% 
+     # Is that family represented by any sequence in the reference,
+     # or any branch on the tree?
+     summarize(across(starts_with('in_'),
+                   ~any(.x, na.rm = TRUE))) %>% 
+     filter(in_tree == TRUE) %>% 
+     summarize(across(starts_with('in_'),
+                      ~sum(.x, na.rm = TRUE)))
 ```
 
+```{r}
+72/115
+```
 
-## % tree detected from data
+What about only major crop families?
+
+```{r}
+combined.df %>% 
+     filter(!is.na(`FAO group code`)) %>% 
+     select(family, 
+            in_ref,
+            in_tree) %>% 
+     group_by(family) %>% 
+     # Is that family represented by any sequence in the reference,
+     # or any branch on the tree?
+     summarize(across(starts_with('in_'),
+                   ~any(.x, na.rm = TRUE))) %>% 
+     filter(in_tree == TRUE) %>% 
+     summarize(across(starts_with('in_'),
+                      ~sum(.x, na.rm = TRUE)))
+```
+```{r}
+45/54
+```
+
+## % ref detected from data
+
+```{r}
+combined.df %>% 
+     select(family, 
+            in_data,
+            in_ref) %>% 
+     group_by(family) %>% 
+     # Is that family represented by any sequence in the reference,
+     # or any branch on the tree?
+     summarize(across(starts_with('in_'),
+                   ~any(.x, na.rm = TRUE))) %>% 
+     filter(in_ref == TRUE) %>%
+     summarize(across(starts_with('in_'),
+                      ~sum(.x, na.rm = TRUE)))
+```
+```{r}
+54/80
+```
+
+```{r}
+combined.df %>% 
+     filter(!is.na(`FAO group code`)) %>% 
+     select(family, 
+            in_data,
+            in_ref) %>% 
+     group_by(family) %>% 
+     # Is that family represented by any sequence in the reference,
+     # or any branch on the tree?
+     summarize(across(starts_with('in_'),
+                   ~any(.x, na.rm = TRUE))) %>% 
+     filter(in_ref == TRUE) %>%
+     summarize(across(starts_with('in_'),
+                      ~sum(.x, na.rm = TRUE)))
+```
+```{r}
+33/45
+```
+
+```{r}
+combined.df %>% 
+     filter(!is.na(`FAO group code`) & in_ref) %>% 
+     select(family, 
+            in_data,
+            in_ref) %>% 
+     group_by(family) %>% 
+     # Is that family represented by any sequence in the reference,
+     # or any branch on the tree?
+     summarize(across(starts_with('in_'),
+                   ~any(.x, na.rm = TRUE))) %>% 
+     filter(in_ref == TRUE) %>%
+     summarize(across(starts_with('in_'),
+                      ~sum(.x, na.rm = TRUE)))
+```
+## Major crops missing from reference
+
+```{r}
+missing <- 
+     major.crop %>% 
+     filter(yes_crop_no_ref) %>% 
+     # Join to metadata common name for better interpretation
+     rownames_to_column(var = 'species_name_') %>% 
+     select(species_name_, 
+            `FAO group code`) %>% 
+     left_join(metadata)
+
+missing
+```
+
 
 # Visualize taxa
 
@@ -717,7 +875,7 @@ test$expected
 ```
 
 ## Metacoder tree
-1
+
 ### Reference
 
 #### Full tree
