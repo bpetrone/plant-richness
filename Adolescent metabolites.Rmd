@@ -13,6 +13,7 @@ library(here)
 library(fitdistrplus)
 library(lme4) # For glmer
 library(lmerTest)
+library(patchwork)
 library(phyloseq)
 library(tidyverse)
 library(vegan) # For rarecurve()
@@ -438,6 +439,80 @@ samdf %>%
 samdf$age_decades <- samdf$age_days/365/10 
 ```
 
+#### Blood pressure
+
+```{r}
+bp <- 
+     samdf %>% 
+     select(subj, visit, matches('_bp'))
+
+head(bp)
+```
+```{r}
+bp <- 
+     pivot_longer(bp,
+                  cols = matches('_bp'),
+                  names_to = 'measure',
+                  values_to = 'value')
+
+bp
+```
+```{r}
+bp <- 
+     bp %>% 
+     separate(col = measure,
+              into = c('measure', 'type'),
+              sep = '_',
+              extra = 'merge') %>% 
+     pivot_wider(names_from = 'type',
+                 values_from = 'value') %>% 
+     rename(percentile = bp_percentile)
+
+bp
+```
+```{r}
+# Plot distribution
+ggplot(bp, aes(bp)) +
+     geom_histogram(binwidth = 5, 
+                    boundary = 0) +
+     facet_wrap(~measure,
+                nrow = 2) +
+     labs(x = 'Blood pressure',
+          y = 'Frequency') +
+     theme(plot.margin = unit(c(0.125, 0.25, 0, 0), units = 'inches'))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            'supplemental',
+            'adolescent',
+            paste0(plotID, '_BP histogram.pdf')),
+       height = 4, width = 3)
+```
+
+```{r}
+ggplot(bp, aes(percentile)) +
+     geom_histogram(binwidth = 5,
+                    boundary = 0) +
+     facet_wrap(~measure,
+                nrow = 2) +
+     ylim(0, 105) +
+     labs(x = 'BP percentile',
+          y = 'Frequency') +
+     theme(plot.margin = unit(c(0.125, 0.25, 0, 0), units = 'inches'))
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            'supplemental',
+            'adolescent',
+            paste0(plotID, '_BP percentile histogram.pdf')),
+       height = 4, width = 3)
+```
+
 #### Set reference
 
 ```{r}
@@ -597,6 +672,7 @@ alpha <-
             ethnicity,
             bmi,
             zbmi, 
+            matches('_bp'),
             starts_with('ses'),
             worry_ever,
             actual_ever,
@@ -619,11 +695,70 @@ dim(alpha.raw)
 
 # Analyze
 
+## Rough pass blood pressure
+
+```{r}
+bp <- 
+     alpha %>% 
+     select(subj,
+            timepoint, 
+            obs,
+            matches('_bp')) %>% 
+     distinct()
+
+dim(bp)
+bp <- filter(bp,
+             if_any(matches('_bp'),
+                    ~!is.na(.x)))
+dim(bp)
+```
+
+```{r}
+any(is.na(bp$systolic_bp))
+any(is.na(bp$systolic_bp_percentile))
+```
+Strangely the above expression isn't catching some NAs in the percentile column, but let's just plot raw relationships first.
+
+```{r}
+bp <- 
+     bp %>% 
+     pivot_longer(cols = matches('_bp'),
+                  names_to = 'measure',
+                  values_to = 'value') %>% 
+     separate(measure,
+              into = c('measure', 'type'),
+              sep = '_',
+              extra = 'merge') %>% 
+     pivot_wider(names_from = 'type',
+                 values_from = 'value') %>% 
+     rename(percentile = bp_percentile)
+
+bp
+```
+```{r}
+ggplot(bp, aes(x = obs,
+               y = bp)) +
+     geom_point(alpha = 0.5) +
+     facet_wrap(~measure) +
+     labs(x = 'pMR', y = 'Blood pressure')
+```
+
+```{r}
+ggplot(bp, aes(x = obs,
+               y = percentile)) +
+     geom_point(alpha = 0.5) +
+     facet_wrap(~measure) +
+     labs(x = 'pMR', y = 'BP percentile')
+```
+
+## Summarize per-subject
+
 ```{r}
 alpha %>% 
      summarize(med = median(obs),
                mad = mad(obs))
 ```
+
 ## Model: pMR response
 
 ### Linear model
@@ -631,7 +766,7 @@ alpha %>%
 ```{r}
 alpha.subset <- 
      alpha %>% 
-     # filter(reads_food > 0) %>%
+     filter(reads_food > 0) %>%
      # filter(threshold == 1000 & !is.na(obs_rare)) %>%
      select(-c(obs_rare, threshold, se)) %>% 
      distinct() %>% 
@@ -649,11 +784,14 @@ descdist(alpha$obs, discrete = TRUE, boot = 500)
 
 ```{r}
 # Check distribution
-ggplot(alpha.subset, aes(x = obs)) +
+p.pmr.hist <- 
+     ggplot(alpha.subset, aes(x = obs)) +
      geom_histogram(binwidth = 2,
                     boundary = 0) +
      labs(x = 'pMR\n', y = 'Frequency') +
      theme(panel.grid.minor = element_blank())
+
+p.pmr.hist
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
@@ -780,7 +918,8 @@ betas$p_cat <-
 
 ```{r}
 # Plots in style of Yap et al
-betas %>% 
+p.betas <- 
+     betas %>% 
      filter(covar != "(Intercept)") %>% # Exclude intercept
      # Exclude Unknown covariate categories (missing data)
      filter(!grepl(pattern = 'Unknown', covar)) %>% 
@@ -794,9 +933,11 @@ betas %>%
                        color = p<=0.05),
                     size = 1) +
      scale_color_manual(values = c('gray40', 'black')) +
-     labs(x = 'Covariate', y = 'Regression\ncoefficient') +
+     labs(x = 'Covariate', y = 'Regression coefficient') +
      coord_flip() +
      theme(legend.position = 'none')
+
+p.betas
 ```
 
 ```{r}
@@ -947,7 +1088,7 @@ betas %>%
                        ymax = CI97.5,
                        color = p<=0.05)) +
      scale_color_manual(values = c('gray40', 'black')) +
-     labs(x = 'Covariate', y = 'Regression\ncoefficient') +
+     labs(x = 'Covariate', y = 'Regression coefficient') +
      coord_flip() +
      theme(legend.position = 'none')
 ```
@@ -998,8 +1139,209 @@ ggsave(here('results',
 
 ### Visualize raw relationships
 
-```{r}
+#### Age
 
+```{r}
+p.age <- 
+     ggplot(alpha.subset, aes(x = age_decades*10,
+                         y = obs)) +
+     geom_point(alpha = 0.2) +
+     geom_smooth(method = 'lm',
+                 color = '#e03531') +
+     scale_x_continuous(breaks = seq(10, 18, by = 2)) +
+     labs(title = 'Age (years)', y = 'pMR') + 
+     ylim(0, 35) +
+     theme(axis.title.x =  element_blank())
+
+p.age
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '3',
+            paste0(plotID, '_pMR x age raw relationship.pdf')),
+       device = cairo_pdf,
+       height = 3, width = 2.5)
+```
+
+#### Income categories
+
+```{r}
+# Clean up household income labels for plotting
+levels(alpha.subset$ses)
+```
+
+```{r}
+alpha.subset$ses <- 
+     factor(alpha.subset$ses,
+            labels = c('<$25K',
+                       '$25-$49K',
+                       '$50-$74K',
+                       '$75K-$99K',
+                       '>$100K',
+                       'Unknown'))
+```
+
+```{r}
+alpha.subset %>% 
+     filter(ses != 'Unknown') %>% # Remove Unknown category
+     ggplot(aes(x = ses, y = obs)) +
+     geom_boxplot() +
+     labs(x = 'Household income', y = 'pMR') +
+     theme(axis.text.x = element_text(angle = 20, hjust = 1)) +
+     theme(axis.title.y = element_blank())
+```
+
+```{r}
+# As dotplot
+p.income <- 
+     alpha.subset %>% 
+     filter(ses != 'Unknown') %>% # Remove Unknown category
+     ggplot(aes(x = ses, y = obs)) +
+     geom_dotplot(binaxis = 'y',
+                  binwidth = 1,
+                  stackdir = 'center',
+                  stackratio = 0.75,
+                  alpha = 0.2) +
+     stat_summary(fun= median,
+                  geom = 'crossbar',
+                  width = 0.25,
+                  color = '#e03531') +
+     stat_summary(fun= median,
+                  fun.min = function(x){median(x) - mad(x)},
+                  fun.max = function(x){median(x) + mad(x)},
+                  geom = 'errorbar',
+                  width = 0.1,
+                  color = '#e03531') +
+     ylim(0, 35) +
+     labs(title = 'Income', y = 'pMR')  +
+     theme(axis.text.x = element_text(angle = 30, hjust = 1),
+           axis.title = element_blank()) 
+
+p.income
+```
+
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '3',
+            paste0(plotID, '_pMR x income raw relationship.pdf')),
+       device = cairo_pdf,
+       height = 3.5, width = 2.5)
+```
+
+#### Case status
+
+```{r}
+alpha.subset$casecontrol <- 
+     factor(alpha.subset$casecontrol,
+            labels = c('Healthy\n(control)',
+                       'Obesity\n(case)'))
+```
+
+```{r}
+# As barplot
+alpha.subset %>% 
+     ggplot(aes(x = casecontrol, y = obs)) +
+     geom_boxplot() +
+     labs(x = 'Health status', y = 'pMR') +
+     theme(axis.text.x = element_text(angle = 20, hjust = 1))
+```
+
+```{r}
+# As dotplot
+p.case <- 
+     alpha.subset %>% 
+     ggplot(aes(x = casecontrol, y = obs)) +
+     geom_dotplot(binaxis = 'y',
+                  binwidth = 1,
+                  stackdir = 'center',
+                  stackratio = 0.75,
+                  alpha = 0.2) +
+     stat_summary(fun= median,
+                  geom = 'crossbar',
+                  width = 0.25,
+                  color = '#e03531') +
+     stat_summary(fun= median,
+                  fun.min = function(x){median(x) - mad(x)},
+                  fun.max = function(x){median(x) + mad(x)},
+                  geom = 'errorbar',
+                  width = 0.1,
+                  color = '#e03531') +
+     ylim(0, 35) +
+     labs(title = 'Weight status', y = 'pMR') +
+     theme(axis.title = element_blank())
+
+p.case
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '3',
+            paste0(plotID, '_pMR x case status raw relationship.pdf')),
+       device = cairo_pdf,
+       height = 4, width = 3)
+```
+
+#### Food insecurity
+
+```{r}
+p.insec <- 
+     alpha.subset %>% 
+     filter(actual_ever != 'Unknown') %>% 
+     ggplot(aes(x = actual_ever, y = obs)) +
+     geom_dotplot(binaxis = 'y',
+                  binwidth = 1,
+                  stackdir = 'center',
+                  stackratio = 0.75,
+                  alpha = 0.2) +
+     stat_summary(fun= median,
+                  geom = 'crossbar',
+                  width = 0.25,
+                  color = '#e03531') +
+     stat_summary(fun= median,
+                  fun.min = function(x){median(x) - mad(x)},
+                  fun.max = function(x){median(x) + mad(x)},
+                  geom = 'errorbar',
+                  width = 0.1,
+                  color = '#e03531') +
+     ylim(0, 35) +
+     labs(title = 'Food insecurity', y = 'pMR') +
+     theme(axis.title = element_blank())
+
+p.insec
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '3',
+            paste0(plotID, '_pMR x food insecurity raw relationship.pdf')),
+       device = cairo_pdf,
+       height = 3, width = 2.5)
+```
+
+Now, combine all of the above with patchwork:
+
+```{r}
+((p.prev / p.pmr.hist ) | (p.betas)) /
+(p.age | p.income | p.case | p.insec)
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'manuscript',
+            '3',
+            paste0(plotID, '_Combined figure.pdf')),
+       device = cairo_pdf,
+       height = 120, width = 180, units = 'mm')
 ```
 
 
