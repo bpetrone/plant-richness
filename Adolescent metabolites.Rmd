@@ -1318,7 +1318,8 @@ alpha.raw <-
 dim(alpha.raw)
 metab.df <- 
      alpha.raw %>% 
-     select(name,
+     select(name = row,
+            ends_with('_bp'), 
             one_of(metabs),
             ends_with('_log'))
 
@@ -1329,15 +1330,15 @@ dim(metab.df)
 ```{r}
 # Raw data
 pivot_longer(metab.df,
-             one_of(metabs),
-             names_to = 'metabolite',
+             c(one_of(metabs), ends_with('_bp')),
+             names_to = 'measure',
              values_to = 'value') %>% 
      ggplot(aes(x = value)) +
      geom_histogram() +
      # ggplot(aes(x = obs, y = value)) +
      # geom_point(alpha = 0.5) +
      labs(y = 'Count') +
-     facet_wrap(~metabolite,
+     facet_wrap(~measure,
                 scales = 'free') +
      theme(axis.title.x = element_blank(),
            axis.text = element_blank())
@@ -1345,29 +1346,29 @@ pivot_longer(metab.df,
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 
-            'manuscript', 
-            'supplemental',
-            'adolescent',
-            paste0(plotID, '_metabolite response variable histogram (with zeros).pdf')),
-       height = 6, width = 6)
+# ggsave(here('results', 
+#             'manuscript', 
+#             'supplemental',
+#             'adolescent',
+#             paste0(plotID, '_metabolite response variable histogram (with zeros).pdf')),
+#        height = 6, width = 6)
 ```
 
 
 ```{r}
 # Logged
 pivot_longer(metab.df,
-             ends_with('log'),
-             names_to = 'metabolite',
+             c(ends_with('log'), ends_with('_bp')),
+             names_to = 'measure',
              values_to = 'value') %>% 
      ggplot(aes(x = value)) +
      geom_histogram() +
      # ggplot(aes(x = obs, y = value)) +
      # geom_point(alpha = 0.5) +
-     facet_wrap(~metabolite,
+     facet_wrap(~measure,
                 scales = 'free') +
      labs(y = 'Count') +
-     facet_wrap(~metabolite,
+     facet_wrap(~measure,
                 scales = 'free') +
      theme(axis.title.x = element_blank(),
            axis.text = element_blank())
@@ -1375,25 +1376,27 @@ pivot_longer(metab.df,
 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results', 
-            'manuscript', 
-            'supplemental',
-            'adolescent',
-            paste0(plotID, '_log(metabolite) response variable histogram (with zeros).pdf')),
-       height = 6, width = 6)
+# ggsave(here('results', 
+#             'manuscript', 
+#             'supplemental',
+#             'adolescent',
+#             paste0(plotID, '_log(metabolite) response variable histogram (with zeros).pdf')),
+#        height = 6, width = 6)
 ```
 
 ```{r}
 # Do any have negative values?
 metab.df %>% 
-     select(one_of(metabs)) %>% 
+     select(c(one_of(metabs), 
+              ends_with('_bp'))) %>% 
      apply(2, function(x){range(x, na.rm = TRUE)})
 ```
 
 ```{r}
 # How often do NAs occur?
 metab.df %>% 
-     select(one_of(metabs)) %>% 
+     select(c(one_of(metabs),
+              ends_with('_bp'))) %>% 
      apply(2, function(x){sum(is.na(x))})
 ```
 
@@ -1509,7 +1512,7 @@ pca.df <-
      pca$x %>% 
      data.frame() %>% 
      rownames_to_column(var = 'name') %>% 
-     left_join(select(alpha.raw, name, obs)) %>% 
+     left_join(select(alpha.raw, name = row, obs)) %>% 
      select(name, obs, everything())
 ```
 
@@ -1562,7 +1565,7 @@ head(percentage)
 alpha.raw <- 
      pca.df %>% 
      select(name, PC1) %>% 
-     right_join(alpha.raw)
+     right_join(alpha.raw, by = c('name' = 'row'))
 ```
 
 ## Linear model
@@ -1594,8 +1597,11 @@ metabs
 ```
 
 ```{r}
-# Add PC1 from above
-metabs <- c(metabs, 'PC1')
+# Add blood pressure and PC1 from above
+metabs <- c(metabs, 
+            'systolic_bp',
+            'diastolic_bp',
+            'PC1')
 ```
 
 ```{r}
