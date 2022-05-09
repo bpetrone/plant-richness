@@ -439,80 +439,6 @@ samdf %>%
 samdf$age_decades <- samdf$age_days/365/10 
 ```
 
-#### Blood pressure
-
-```{r}
-bp <- 
-     samdf %>% 
-     select(subj, visit, matches('_bp'))
-
-head(bp)
-```
-```{r}
-bp <- 
-     pivot_longer(bp,
-                  cols = matches('_bp'),
-                  names_to = 'measure',
-                  values_to = 'value')
-
-bp
-```
-```{r}
-bp <- 
-     bp %>% 
-     separate(col = measure,
-              into = c('measure', 'type'),
-              sep = '_',
-              extra = 'merge') %>% 
-     pivot_wider(names_from = 'type',
-                 values_from = 'value') %>% 
-     rename(percentile = bp_percentile)
-
-bp
-```
-```{r}
-# Plot distribution
-ggplot(bp, aes(bp)) +
-     geom_histogram(binwidth = 5, 
-                    boundary = 0) +
-     facet_wrap(~measure,
-                nrow = 2) +
-     labs(x = 'Blood pressure',
-          y = 'Frequency') +
-     theme(plot.margin = unit(c(0.125, 0.25, 0, 0), units = 'inches'))
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results',
-            'manuscript',
-            'supplemental',
-            'adolescent',
-            paste0(plotID, '_BP histogram.pdf')),
-       height = 4, width = 3)
-```
-
-```{r}
-ggplot(bp, aes(percentile)) +
-     geom_histogram(binwidth = 5,
-                    boundary = 0) +
-     facet_wrap(~measure,
-                nrow = 2) +
-     ylim(0, 105) +
-     labs(x = 'BP percentile',
-          y = 'Frequency') +
-     theme(plot.margin = unit(c(0.125, 0.25, 0, 0), units = 'inches'))
-```
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-ggsave(here('results',
-            'manuscript',
-            'supplemental',
-            'adolescent',
-            paste0(plotID, '_BP percentile histogram.pdf')),
-       height = 4, width = 3)
-```
-
 #### Set reference
 
 ```{r}
@@ -606,7 +532,9 @@ samdf$actual_ever <-
 levels(samdf$actual_ever)
 ```
 
-### Metabolites
+### Clinical measures
+
+#### Metabolites
 
 From the POMMS interim report, metabolites that had differences between case and control were:
 
@@ -657,6 +585,82 @@ targeted.panel <-
      names()
 ```
 
+#### Blood pressure
+
+```{r}
+bp <- 
+     samdf %>% 
+     select(subj, visit, matches('_bp'))
+
+head(bp)
+```
+```{r}
+bp <- 
+     pivot_longer(bp,
+                  cols = matches('_bp'),
+                  names_to = 'measure',
+                  values_to = 'value')
+
+bp
+```
+```{r}
+bp <- 
+     bp %>% 
+     separate(col = measure,
+              into = c('measure', 'type'),
+              sep = '_',
+              extra = 'merge') %>% 
+     pivot_wider(names_from = 'type',
+                 values_from = 'value') %>% 
+     rename(percentile = bp_percentile)
+
+bp
+```
+```{r}
+# Plot distribution
+ggplot(bp, aes(bp)) +
+     geom_histogram(binwidth = 5, 
+                    boundary = 0) +
+     facet_wrap(~measure,
+                nrow = 2) +
+     labs(x = 'Blood pressure',
+          y = 'Frequency') +
+     theme(plot.margin = unit(c(0.125, 0.25, 0, 0), units = 'inches'))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results',
+#             'manuscript',
+#             'supplemental',
+#             'adolescent',
+#             paste0(plotID, '_BP histogram.pdf')),
+#        height = 4, width = 3)
+```
+
+```{r}
+ggplot(bp, aes(percentile)) +
+     geom_histogram(binwidth = 5,
+                    boundary = 0) +
+     facet_wrap(~measure,
+                nrow = 2) +
+     ylim(0, 105) +
+     labs(x = 'BP percentile',
+          y = 'Frequency') +
+     theme(plot.margin = unit(c(0.125, 0.25, 0, 0), units = 'inches'))
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+# ggsave(here('results',
+#             'manuscript',
+#             'supplemental',
+#             'adolescent',
+#             paste0(plotID, '_BP percentile histogram.pdf')),
+#        height = 4, width = 3)
+```
+
+## Join
+
 ```{r}
 # Pull from sample data, and join to results
 alpha <- 
@@ -672,7 +676,7 @@ alpha <-
             ethnicity,
             bmi,
             zbmi, 
-            matches('_bp'),
+            matches('_bp$'), # Exclude percentile categories
             starts_with('ses'),
             worry_ever,
             actual_ever,
@@ -694,62 +698,6 @@ dim(alpha.raw)
 ```
 
 # Analyze
-
-## Rough pass blood pressure
-
-```{r}
-bp <- 
-     alpha %>% 
-     select(subj,
-            timepoint, 
-            obs,
-            matches('_bp')) %>% 
-     distinct()
-
-dim(bp)
-bp <- filter(bp,
-             if_any(matches('_bp'),
-                    ~!is.na(.x)))
-dim(bp)
-```
-
-```{r}
-any(is.na(bp$systolic_bp))
-any(is.na(bp$systolic_bp_percentile))
-```
-Strangely the above expression isn't catching some NAs in the percentile column, but let's just plot raw relationships first.
-
-```{r}
-bp <- 
-     bp %>% 
-     pivot_longer(cols = matches('_bp'),
-                  names_to = 'measure',
-                  values_to = 'value') %>% 
-     separate(measure,
-              into = c('measure', 'type'),
-              sep = '_',
-              extra = 'merge') %>% 
-     pivot_wider(names_from = 'type',
-                 values_from = 'value') %>% 
-     rename(percentile = bp_percentile)
-
-bp
-```
-```{r}
-ggplot(bp, aes(x = obs,
-               y = bp)) +
-     geom_point(alpha = 0.5) +
-     facet_wrap(~measure) +
-     labs(x = 'pMR', y = 'Blood pressure')
-```
-
-```{r}
-ggplot(bp, aes(x = obs,
-               y = percentile)) +
-     geom_point(alpha = 0.5) +
-     facet_wrap(~measure) +
-     labs(x = 'pMR', y = 'BP percentile')
-```
 
 ## Summarize per-subject
 
