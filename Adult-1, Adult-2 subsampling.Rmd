@@ -873,6 +873,16 @@ rm(results.df.1,
 ```
 
 ```{r}
+# Summarize duplicates 
+results.df %>% 
+     group_by(scheme, study, index) %>% 
+     distinct() %>% 
+     count() %>% 
+     filter(n < 100)
+```
+
+
+```{r}
 # Remove duplicates
 dim(results.df)
 results.df <- distinct(results.df)
@@ -984,8 +994,35 @@ results.df <-
      results.df %>% 
      left_join(rho.df) %>% 
      left_join(signif)
+```
 
-rm(rho.df, signif)
+```{r}
+# Add empty values for Adult-2 for better plotting
+empty <- 
+     data.frame(scheme = c(2,5:7),
+                study = 'Adult-2',
+                rho = NA,
+                p = NA,
+                percentage = NA) %>% 
+     left_join(rho.df)
+
+results.df <- bind_rows(results.df, empty)
+rm(empty, rho.df)
+```
+
+```{r}
+# Sampling scheme labels:
+results.df$scheme <- 
+     factor(results.df$scheme,
+            levels = 1:7,
+            labels = c('Single sample',
+                       'Two samples (1d apart)', 
+                       'Two samples (3-10d apart)',
+                       'Three samples (1/wk)',
+                       'Four samples (1/wk)',
+                       'Five samples (1/wk)',
+                       'Six samples (1/wk)')
+     )
 ```
 
 ```{r}
@@ -1001,20 +1038,10 @@ results.df$index <-
 ```
 
 ```{r}
-# Sampling scheme labels:
-schemes <- 
-     c('Single sample',
-       'Two samples (1d apart)', 
-       'Two samples (3-10d apart)',
-       'Three samples (1/wk)',
-       'Four samples (1/wk)',
-       'Five samples (1/wk)',
-       'Six samples (1/wk)')
-```
-
-```{r}
 # Plot
-ggplot(results.df, aes(x = scheme, y = rho, group = scheme)) +
+results.df %>% 
+     filter(study == 'Adult-2') %>% 
+     ggplot(aes(x = scheme, y = rho, group = scheme)) +
      geom_hline(aes(yintercept = rho_full),
                 linetype = 'dotted',
                 color = 'gray',
@@ -1025,8 +1052,6 @@ ggplot(results.df, aes(x = scheme, y = rho, group = scheme)) +
                                   '#8ace7e')) +
      facet_grid(cols = vars(index),
                 rows = vars(study)) +
-     scale_x_continuous(breaks = 1:7,
-                        labels = schemes) +
      labs(y = 'Spearman *rho*', 
           x = 'Sampling scheme',
           fill = '*p* values\n<0.05') +
@@ -1043,9 +1068,9 @@ ggplot(results.df, aes(x = scheme, y = rho, group = scheme)) +
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results', 
             'manuscript',
-            '4',
-            paste0(plotID, '_Sampling schemes, Spearman rho.pdf')),
-       height = 5, width = 8)
+            '2',
+            paste0(plotID, '_Sampling schemes, Spearman rho, Adult-2.pdf')),
+       height = 3.5, width = 8)
 ```
 
 ```{r}

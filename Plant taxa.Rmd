@@ -433,8 +433,6 @@ dim(combined.df)
 
 #### Major crops in reference
 
-#### Add major/minor crop label
-
 Interestingly, from Milla et al. 2021 methods: "Before matching, the FAO Commodity List was checked for taxonomic accuracy and validity against The Plant List using function TPL of the Taxonstand package in R v.3.6.2. Commodity groups composed of a single crop species were automatically matched but most groups included several taxa. However, all groups but wheat were composed of a major contributor to agricultural production, together with congeneric minor crops. Therefore, production data were assigned to the major crop of each multispecific group. For wheat, we assigned 93% of production to bread wheat and 7% to durum. *The 112 crop species with a tracked record in FAOSTAT* were operationally coded as major crops and the remaining 754 crop species that were included in the Crop Origins database, but which lacked a FAOSTAT record, were considered as minor crops."
 
 ```{r}
@@ -673,7 +671,9 @@ combined.df %>%
      summarize(across(starts_with('in_'),
                       ~sum(.x, na.rm = TRUE)))
 ```
-## Major crops missing from reference
+## Major crops
+
+### Missing
 
 ```{r}
 missing <- 
@@ -688,6 +688,47 @@ missing <-
 missing
 ```
 
+### Included
+
+```{r}
+# Do a Chi squared test
+# Are we more or less likely to include a crop in the reference, given its
+# major/minor status?
+
+# Convert data back to binary and tally
+m <- 
+     major.crop %>% 
+     select(major_crop, in_ref) %>% 
+     # Need to do some organizing here because in_ref is a factor for plot
+     # below
+     mutate(in_ref = as.numeric(as.character(in_ref))) %>% 
+     # Major crop, but not in reference: 3, yellow/orange
+     # Not a major crop, not in reference: 0, white
+     mutate(across(everything(), ~!(.x %in% c(0, 3)))) %>% 
+     group_by(major_crop, in_ref) %>% 
+     count()
+
+m
+```
+
+```{r}
+# Pivot to wide
+m <- 
+     pivot_wider(m, 
+                 names_from = in_ref,
+                 names_prefix = 'in_ref_',
+                 values_from = n)
+
+m
+```
+```{r}
+test <- chisq.test(m)
+test
+```
+
+```{r}
+test$expected
+```
 
 # Visualize taxa
 
@@ -837,41 +878,6 @@ ggsave(here('results',
        # Try this to preserve background transparency
        device = cairo_ps,
        height = 10, width = 10)
-```
-
-```{r}
-# Do a Chi squared test
-# Are we more or less likely to include a crop in the reference, given its
-# major/minor status?
-
-# Convert data back to binary and tally
-m <- 
-     major.crop %>% 
-     select(major_crop, in_ref) %>% 
-     mutate(across(everything(), ~.x != 0)) %>% 
-     group_by(major_crop, in_ref) %>% 
-     count()
-
-m
-```
-
-```{r}
-# Pivot to wide
-m <- 
-     pivot_wider(m, 
-                 names_from = in_ref,
-                 names_prefix = 'in_ref_',
-                 values_from = n)
-
-m
-```
-```{r}
-test <- chisq.test(m)
-test
-```
-
-```{r}
-test$expected
 ```
 
 ## UpSet plot

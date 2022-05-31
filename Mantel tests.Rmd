@@ -31,7 +31,7 @@ library(vegan)
 ```{r}
 # Joint phyloseq object
 ps <- 
-     here('data', 'processed', 'phyloseq', '20210408_ps_trnL.rds') %>% 
+     here('data', 'processed', 'phyloseq', '20210428_ps_trnL.rds') %>% 
      readRDS()
 
 ps
@@ -103,8 +103,23 @@ dhq3.plantgroups.onr <-
 
 ```{r}
 asa24.nut.chomp <- 
-     here('data', 'processed', 'ASA24', 
+     here('data', 'processed', 'ASA24', 'all records',
           '20210405_Nutrients, kcal-normalized, all records_chomp.rds') %>% 
+     readRDS()
+
+asa24.nut.1d.chomp <- 
+     here('data', 'processed', 'ASA24', 'paired records',
+          'Nutrients, kcal-normalized, 1 day prior_CHOMP.rds') %>% 
+     readRDS()
+
+asa24.nut.2d.chomp <- 
+     here('data', 'processed', 'ASA24', 'paired records',
+          'Nutrients, kcal-normalized, 2 day prior_CHOMP.rds') %>% 
+     readRDS()
+
+asa24.nut.3d.chomp <- 
+     here('data', 'processed', 'ASA24', 'paired records',
+          'Nutrients, kcal-normalized, 3 day prior_CHOMP.rds') %>% 
      readRDS()
 ```
 
@@ -113,26 +128,49 @@ asa24.nut.chomp <-
 ```{r}
 # All
 asa24.foodgroups.chomp <- 
-     here('data', 'processed', 'ASA24', 
+     here('data', 'processed', 'ASA24', 'all records',
           '20210405_Food groups, kcal-normalized, all records_chomp.rds') %>% 
      readRDS()
 
-# Plant only
-asa24.plantgroups.chomp <- 
-     here('data', 'processed', 'ASA24', 
-          '20210405_Plant food groups, kcal-normalized, all records_chomp.rds') %>% 
+asa24.foodgroups.1d.chomp <- 
+     here('data', 'processed', 'ASA24', 'paired records', 
+          'Food groups, kcal-normalized, 1 day prior_CHOMP.rds') %>% 
+     readRDS()
+
+asa24.foodgroups.2d.chomp <- 
+     here('data', 'processed', 'ASA24', 'paired records', 
+          'Food groups, kcal-normalized, 2 day prior_CHOMP.rds') %>% 
+     readRDS()
+
+asa24.foodgroups.3d.chomp <- 
+     here('data', 'processed', 'ASA24', 'paired records', 
+          'Food groups, kcal-normalized, 3 day prior_CHOMP.rds') %>% 
      readRDS()
 ```
-
 
 ### ONR
 
 #### Nutrients
 
 ```{r}
-asa24.nut.onr <- 
-     here('data', 'processed', 'ASA24', 
-          '20210405_Nutrients, kcal-normalized, all records_onr.rds') %>% 
+asa24.nut.onr <-
+     here('data', 'processed', 'ASA24', 'all records',
+          '20210405_Nutrients, kcal-normalized, all records_onr.rds') %>%
+     readRDS()
+
+asa24.nut.1d.onr <- 
+     here('data', 'processed', 'ASA24', 'paired records',
+          'Nutrients, kcal-normalized, 1 day prior_ONR.rds') %>% 
+     readRDS()
+
+asa24.nut.2d.onr <- 
+     here('data', 'processed', 'ASA24', 'paired records',
+          'Nutrients, kcal-normalized, 2 day prior_ONR.rds') %>% 
+     readRDS()
+
+asa24.nut.3d.onr <- 
+     here('data', 'processed', 'ASA24', 'paired records',
+          'Nutrients, kcal-normalized, 3 day prior_ONR.rds') %>% 
      readRDS()
 ```
 
@@ -141,14 +179,23 @@ asa24.nut.onr <-
 ```{r}
 # All
 asa24.foodgroups.onr <- 
-     here('data', 'processed', 'ASA24', 
+     here('data', 'processed', 'ASA24', 'all records',
           '20210405_Food groups, kcal-normalized, all records_onr.rds') %>% 
      readRDS()
 
-# Plant only
-asa24.plantgroups.onr <- 
-     here('data', 'processed', 'ASA24', 
-          '20210405_Plant food groups, kcal-normalized, all records_onr.rds') %>% 
+asa24.foodgroups.1d.onr <- 
+     here('data', 'processed', 'ASA24', 'paired records',
+          'Food groups, kcal-normalized, 1 day prior_ONR.rds') %>% 
+     readRDS()
+
+asa24.foodgroups.2d.onr <- 
+     here('data', 'processed', 'ASA24', 'paired records',
+          'Food groups, kcal-normalized, 2 day prior_ONR.rds') %>% 
+     readRDS()
+
+asa24.foodgroups.3d.onr <- 
+     here('data', 'processed', 'ASA24', 'paired records', 
+          'Food groups, kcal-normalized, 3 day prior_ONR.rds') %>% 
      readRDS()
 ```
 
@@ -157,14 +204,26 @@ asa24.plantgroups.onr <-
 ## trnL
 
 ```{r}
-# Add pseudocount before relative abundance transform
+# Filter out any samples with zero counts
+# Necessary before converting to relative abundances
+ps <- 
+     ps %>% 
+     prune_samples(sample_sums(.) > 0, .) %>% 
+     prune_taxa(taxa_sums(.) > 0, .)
+```
+
+### Merge
+
+```{r}
+# Add pseudocount
 otu_table(ps) <- otu_table(ps) + 1
 ```
 
 ### Convert to relative abundance
 
 ```{r}
-ps.ra <- transform_sample_counts(ps, function(x){x/sum(x)})
+# Convert to relative abundance
+ps.ra <- transform_sample_counts(ps, function(x){x/sum(x)}) 
 ```
 
 ### Merge within each subject
@@ -181,7 +240,34 @@ ps.ra.merged <- transform_sample_counts(ps.ra.merged,
 
 ```{r}
 # CLR
-asvtab <- otu_table(ps.ra.merged)@.Data
+asvtab.merged <- otu_table(ps.ra.merged)@.Data
+asvtab.merged.clr <- driver::clr(asvtab.merged)
+
+# Replace names, but remember these aren't interpretable as strict ASVs any longer
+colnames(asvtab.merged.clr) <- colnames(asvtab.merged)
+```
+
+### Rename 
+
+CHOMP already has duplicates remove, so can rename as-is.  However, ONR has 13 samples without a confirmed study day, that I remove here since I can't be certain when comparing to ASA24 study day. Note that these are preserved in the trnL "averages" created for the Mantel against DHQ3 data. 
+
+```{r}
+ps
+ps <- subset_samples(ps, !is.na(study_day))
+ps
+```
+
+```{r}
+# Rename samples with SUBJ_STUDY DAY to match naming pattern of the "# days prior" files
+head(sample_names(ps))
+sample_names(ps) <- paste(sample_data(ps)$subj, sample_data(ps)$study_day, 
+                          sep = '_')
+head(sample_names(ps))
+```
+
+```{r}
+# CLR-transform now that these samples removed
+asvtab <- otu_table(ps)@.Data
 asvtab.clr <- driver::clr(asvtab)
 
 # Replace names, but remember these aren't interpretable as strict ASVs any longer
@@ -238,7 +324,15 @@ any(is.na(dhq3.plantgroups))
 # Concatenate dataframes
 asa24.nut <- bind_rows(asa24.nut.chomp, asa24.nut.onr)
 asa24.foodgroups <- bind_rows(asa24.foodgroups.chomp, asa24.foodgroups.onr)
-asa24.plantgroups <- bind_rows(asa24.plantgroups.chomp, asa24.plantgroups.onr)
+
+asa24.nut.1d <- bind_rows(asa24.nut.1d.chomp, asa24.nut.1d.onr)
+asa24.foodgroups.1d <- bind_rows(asa24.foodgroups.1d.chomp, asa24.foodgroups.1d.onr)
+
+asa24.nut.2d <- bind_rows(asa24.nut.2d.chomp, asa24.nut.2d.onr)
+asa24.foodgroups.2d <- bind_rows(asa24.foodgroups.2d.chomp, asa24.foodgroups.2d.onr)
+
+asa24.nut.3d <- bind_rows(asa24.nut.3d.chomp, asa24.nut.3d.onr)
+asa24.foodgroups.3d <- bind_rows(asa24.foodgroups.3d.chomp, asa24.foodgroups.3d.onr)
 
 # Remove original variables
 rm(list = ls()[grep('.chomp$|.onr$', ls())])
@@ -248,7 +342,15 @@ rm(list = ls()[grep('.chomp$|.onr$', ls())])
 # Check completeness
 any(is.na(asa24.nut))
 any(is.na(asa24.foodgroups))
-any(is.na(asa24.plantgroups))
+
+any(is.na(asa24.nut.1d))
+any(is.na(asa24.foodgroups.1d))
+
+any(is.na(asa24.nut.2d))
+any(is.na(asa24.foodgroups.2d))
+
+any(is.na(asa24.nut.3d))
+any(is.na(asa24.foodgroups.3d))
 ```
 
 ### Average
@@ -270,15 +372,52 @@ average_asa <- function(input){
 ```
 
 ```{r}
-# Make averaged versions of the data
-asa24.nut.avg <- average_asa(asa24.nut)
-asa24.foodgroups.avg <- average_asa(asa24.foodgroups)
-asa24.plantgroups.avg <- average_asa(asa24.plantgroups)
+# Make averaged, centered, and scaled versions of the data
+asa24.nut.avg <- 
+     average_asa(asa24.nut) %>% 
+     scale()
+asa24.foodgroups.avg <- 
+     average_asa(asa24.foodgroups) %>% 
+     scale()
 ```
 
 # Mantel
 
 ## ASA24 x DHQ3
+
+```{r}
+# Subset to shared samples
+shared <- intersect(row.names(asa24.nut.avg),
+                    row.names(dhq3.nut))
+
+length(shared)
+```
+
+```{r}
+# Calculate distance 
+dist.asa24.nut <- 
+     dist(asa24.nut.avg[shared, ], method = 'euclidean') 
+dist.asa24.foodgroups <- 
+     dist(asa24.foodgroups.avg[shared, ], method = 'euclidean') 
+
+dist.dhq3.nut <- 
+     dist(dhq3.nut[shared, ], method = 'euclidean') 
+dist.dhq3.foodgroups <- 
+     dist(dhq3.foodgroups[shared, ], method = 'euclidean') 
+```
+
+```{r}
+# Run Mantel
+mantel(dist.asa24.nut, dist.dhq3.nut)
+```
+
+```{r}
+# Run Mantel
+mantel(dist.asa24.foodgroups, dist.dhq3.foodgroups)
+```
+
+
+## trnL x ASA24
 
 ### Averaged ASA
 ```{r}
@@ -289,45 +428,138 @@ shared <- intersect(row.names(asa24.nut.avg),
 length(shared)
 ```
 
-## Calculate distance
+```{r}
+# Euclidean distance on CLR-transformed counts
+dist.trnL <- dist(asvtab.merged.clr[shared, ], method = 'euclidean')
+```
+
+Note that I haven't centered or scaled the ASA24 data.  Would that be important to do?? I think scaling would be important so differences in one variable don't drive all others.
 
 ```{r}
-# Within-trnL
-# Euclidean distance on CLR-transformed counts
-dist.trnL <- dist(asvtab.clr[shared, ], method = 'euclidean')
+# Define plant and animal variables
+plant <- 
+     asa24.foodgroups %>% 
+     select(matches('^F_|G_|PF_LEGUMES|PF_NUTSDS|PF_SOY|V_')) %>% 
+     names()
+
+animal <- 
+     asa24.foodgroups %>% 
+     select(matches('^D_|PF_CUREDMEAT|PF_EGGS|PF_MEAT|PF_ORGAN|PF_POULT|PF_SEAFD|SOLID_FATS')) %>% 
+     names()
 ```
+
 
 ```{r}
 # Within-ASA24
 dist.asa24.nut <- dist(asa24.nut.avg[shared, ], method = 'euclidean')
-dist.asa24.plantgroups <- dist(asa24.plantgroups.avg[shared, ], method = 'euclidean') 
-
-animal <- names(asa24.foodgroups)[!(names(asa24.foodgroups) %in% names(asa24.plantgroups))]
-dist.asa24.animal <- dist(asa24.foodgroups.avg[shared, animal], method = 'euclidean')
+dist.asa24.plant <- dist(asa24.foodgroups.avg[shared, plant], method = 'euclidean') 
+dist.asa24.animal <- dist(asa24.foodgroups.avg[shared, animal], method = 'euclidean') 
 ```
 
-#### Run
-
 ```{r}
+# Run Mantel
 mantel(dist.asa24.nut, dist.trnL)
 ```
 
 ```{r}
-mantel(dist.asa24.plantgroups, dist.trnL)
+mantel(dist.asa24.plant, dist.trnL)
 ```
 
 ```{r}
 mantel(dist.asa24.animal, dist.trnL)
 ```
 
-
 ### Paired ASA-stool samples
 
+#### 1 day lag
 ```{r}
+# Subset to shared samples
+shared <- intersect(row.names(asa24.nut.1d),
+                    sample_names(ps))
 
+length(shared)
 ```
 
-## trnL x ASA24
+```{r}
+# Calculate distances
+# Euclidean distance on CLR-transformed counts
+dist.trnL <- dist(asvtab.clr[shared, ], method = 'euclidean')
+
+# Within-ASA24
+dist.asa24.nut <- 
+     dist(scale(asa24.nut.1d[shared, ]), method = 'euclidean')
+dist.asa24.plant <- 
+     dist(scale(asa24.foodgroups.1d[shared, plant]), method = 'euclidean') 
+dist.asa24.animal <- 
+     dist(scale(asa24.foodgroups.1d[shared, animal]), method = 'euclidean') 
+```
+
+```{r}
+# Run Mantel
+mantel(dist.asa24.nut, dist.trnL)
+mantel(dist.asa24.plant, dist.trnL)
+mantel(dist.asa24.animal, dist.trnL)
+```
+
+#### 2 days lag
+```{r}
+# Subset to shared samples
+shared <- intersect(row.names(asa24.nut.2d),
+                    sample_names(ps))
+
+length(shared)
+```
+
+```{r}
+# Calculate distances
+# Euclidean distance on CLR-transformed counts
+dist.trnL <- dist(asvtab.clr[shared, ], method = 'euclidean')
+
+# Within-ASA24
+dist.asa24.nut <- 
+     dist(scale(asa24.nut.2d[shared, ]), method = 'euclidean')
+dist.asa24.plant <- 
+     dist(scale(asa24.foodgroups.2d[shared, plant]), method = 'euclidean') 
+dist.asa24.animal <- 
+     dist(scale(asa24.foodgroups.2d[shared, animal]), method = 'euclidean') 
+```
+
+```{r}
+# Run Mantel
+mantel(dist.asa24.nut, dist.trnL)
+mantel(dist.asa24.plant, dist.trnL)
+mantel(dist.asa24.animal, dist.trnL)
+```
+
+#### 3 days lag
+```{r}
+# Subset to shared samples
+shared <- intersect(row.names(asa24.nut.3d),
+                    sample_names(ps))
+
+length(shared)
+```
+
+```{r}
+# Calculate distances
+# Euclidean distance on CLR-transformed counts
+dist.trnL <- dist(asvtab.clr[shared, ], method = 'euclidean')
+
+# Within-ASA24
+dist.asa24.nut <- 
+     dist(scale(asa24.nut.3d[shared, ]), method = 'euclidean')
+dist.asa24.plant <- 
+     dist(scale(asa24.foodgroups.3d[shared, plant]), method = 'euclidean') 
+dist.asa24.animal <- 
+     dist(scale(asa24.foodgroups.3d[shared, animal]), method = 'euclidean') 
+```
+
+```{r}
+# Run Mantel
+mantel(dist.asa24.nut, dist.trnL)
+mantel(dist.asa24.plant, dist.trnL)
+mantel(dist.asa24.animal, dist.trnL)
+```
 
 ## trnL x DHQ3
 

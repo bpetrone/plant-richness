@@ -12,6 +12,7 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 
 ```{r libraries, include=FALSE, echo=FALSE}
 library(here)
+library(phyloseq)
 library(scales)
 library(tidyverse)
 ```
@@ -313,6 +314,16 @@ samdf %>%
      group_by(study, pass_qc) %>% 
      count()
 ```
+```{r}
+samdf %>% 
+     group_by(pass_qc) %>% 
+     count()
+```
+```{r}
+# Percent passing QC (excluding NAs)
+1-7/55
+```
+
 # Calculate indices
 
 ### FVS
@@ -537,16 +548,44 @@ names(hei)
 ```{r}
 hei <- 
      hei %>% 
-     rename(hei_tot = 'Total HEI-2015 Score',
-            hei_veg = 'HEI-2015 - Total Vegetables - Component Score',
-            hei_greensbeans = 'HEI-2015 - Greens and Beans - Component Score',
-            hei_fruit = 'HEI-2015 - Total Fruits - Component Score',
-            hei_wholefruits = 'HEI-2015 - Whole Fruits - Component Score',
-            hei_grain = 'HEI-2015 - Whole Grains - Component Score') %>% 
-     # Make custom plant column
-     mutate(hei_plant_all = hei_veg + hei_greensbeans + hei_fruit + 
-                 hei_wholefruits + hei_grain,
-            hei_non_plant = hei_tot - hei_plant_all)
+     rename(hei_tot = 
+                 'Total HEI-2015 Score',
+            hei_veg = 
+                 'HEI-2015 - Total Vegetables - Component Score',
+            hei_greensbeans = 
+                 'HEI-2015 - Greens and Beans - Component Score',
+            hei_fruit = 
+                 'HEI-2015 - Total Fruits - Component Score',
+            hei_wholefruits = 
+                 'HEI-2015 - Whole Fruits - Component Score',
+            hei_grain = 
+                 'HEI-2015 - Whole Grains - Component Score',
+            hei_dairy = 
+                 'HEI-2015 - Dairy - Component Score',
+            hei_tot_prot = 
+                 'HEI-2015 - Total Protein Foods - Component Score',
+            hei_seafood = 
+                 'HEI-2015 - Seafood and Plant Proteins - Component Score',
+            hei_fa = 
+                 'HEI-2015 - Fatty Acids - Component Score',
+            hei_sodium = 
+                 'HEI-2015 - Sodium - Component Score',
+            hei_addsugar = 
+                 'HEI-2015 - Added Sugars - Component Score',
+            hei_satfat = 
+                 'HEI-2015 - Saturated Fats - Component Score') %>% 
+     # Make custom plant and non-plant columns
+     mutate(hei_plant_all = 
+                 hei_veg + 
+                 hei_greensbeans + 
+                 hei_fruit + 
+                 hei_wholefruits + 
+                 hei_grain,
+            hei_non_plant = 
+                 hei_dairy +
+                 hei_sodium +
+                 hei_addsugar +
+                 hei_satfat)
 
 hei
 ```

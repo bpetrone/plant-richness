@@ -1,0 +1,364 @@
+---
+title: "Relative abundance plots"
+output: html_notebook
+---
+
+# Setup
+
+```{r setup, include = FALSE, echo = FALSE}
+require(knitr)
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r}
+library(here)
+library(phyloseq)
+library(tidyverse)
+```
+
+```{r}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
+```{r}
+# Plotting colors
+colors <- 
+     here('..', 'food-dbs', 'data', 'processed', 'plotting', 
+          'trnL colors.csv') %>% 
+     read_csv() %>% 
+     select(family, family_color) %>% 
+     distinct()
+
+colors.vec <- colors$family_color
+names(colors.vec) <- colors$family
+# Convert NA to string representation
+names(colors.vec)[is.na(names(colors.vec))] <- 'NA'
+```
+
+# Read in data
+
+```{r}
+# Full trnL phyloseq object
+ps <- 
+     here('data', 
+          'processed', 
+          'phyloseq',
+          'trnL_combined_ps.rds') %>% 
+     readRDS()
+
+ps
+```
+
+```{r}
+# Rarefied counts
+alpha <- 
+     here('data', 
+          'processed', 
+          'rarefaction',
+          'Rarefied trnL counts (1,000 reads).rds') %>% 
+     readRDS()
+
+dim(alpha)
+```
+
+# Pre-process
+
+Extend richness measures to the full cohort, to include samples that were filtered out because of low read counts.
+
+```{r}
+# Pull ASV table
+asvtab <- otu_table(ps)@.Data
+
+# Calculate richness 
+obs <- 
+     apply(asvtab, 1, function(x){sum(x > 0)}) %>% 
+     data.frame(obs = .) %>% 
+     rownames_to_column(var = 'name')
+```
+
+```{r}
+# Join to read count information
+obs <- 
+     data.frame(ps@sam_data) %>% 
+     rownames_to_column(var = 'row') %>% 
+     select(row, study, subj, reads_food) %>% 
+     full_join(obs, by = c('row' = 'name')) %>% 
+     rename(name = row)
+```
+
+```{r}
+# Join to rarefied richness
+alpha <- 
+     alpha %>% 
+     select(name, starts_with('obs')) %>% 
+     right_join(obs) %>% 
+     select(name, study, subj, everything())
+
+rm(obs)
+```
+
+```{r}
+# Bin read counts
+alpha$reads_food_binned <- 
+     cut(alpha$reads_food, 
+         breaks = c(-1, 500, 1001, 5001, 10001, 30001,
+                    max(alpha$reads_food) + 1), 
+         labels = c('<500 reads', 
+                    '500-1,000', 
+                    '1,000-5,000', 
+                    '5,000-10,000', 
+                    '10,000-30,000',
+                    '>30,000'))
+```
+
+# Analyze
+
+## Mean trnL richness by bin
+
+```{r}
+ggplot(alpha, aes(x = reads_food_binned, y = obs)) +
+     geom_boxplot() +
+     labs(x = 'Read depth bin', y = 'pMR') +
+     theme(axis.text.x = element_text(angle = 20,
+                                      hjust = 1))
+```
+
+```{r}
+ggplot(alpha, aes(x = reads_food_binned, y = obs_rare)) +
+     geom_boxplot() +
+     labs(x = 'Read depth bin', y = 'Rarefied pMR') +
+     theme(axis.text.x = element_text(angle = 20,
+                                      hjust = 1))
+```
+
+## Example visualization
+
+Idea would be to show samples that come from the same sequencing depth, but vary widely by their trnL richness.
+
+```{r}
+samples <- 
+     ps %>% 
+     subset_samples(reads_tot < 107000 & 
+                         reads_tot > 106000) %>% 
+     sample_names()
+
+samples
+```
+
+```{r}
+# Range of richness we'll see
+alpha %>% 
+     filter(name %in% samples) %>% 
+     select(name, starts_with('obs')) %>% 
+     arrange(obs)
+```
+
+```{r}
+# Get melted data for these samples
+melt <- 
+     ps %>% 
+     prune_samples(samples, .) %>%
+     psmelt() %>% 
+     # Factor samples based on level above
+     mutate(Sample = factor(Sample,
+                            levels = c('POMMS-1',
+                                       'POMMS-244',
+                                       'POMMS-315',
+                                       'CHOMP-180')))
+```
+
+```{r}
+# This gets order manually coded below
+# melt %>% 
+#      filter(Sample %in% c('POMMS-1', 'CHOMP-180')) %>% 
+#      filter(Abundance > 0) %>% 
+#      arrange(desc(Abundance))
+```
+
+```{r}
+# Convert variable types for cleaner plotting
+melt %>% 
+     filter(Sample %in% c('POMMS-1', 'CHOMP-180')) %>% 
+     filter(Abundance > 0) %>% 
+     # Relevel the 'name' variable
+     mutate(name = factor(name,
+                          levels = c('Theobroma cacao',
+                                     'Rosaceae (strawberry, brambles, rose)',
+                                     'Pistacia vera',
+                                     'Lamiales',
+                                     'Zea mays',
+                                     'Capsicum annuum',
+                                     'Cocos nucifera',
+                                     'Avena sativa',
+                                     'Oryza sativa',
+                                     'Juglans regia',
+                                     'Poaceae (rye, wheat)',
+                                     'Coriandrum sativum',
+                                     'Piper longum',
+                                     'Vaccinium pallidum',
+                                     'Rubus idaeus',
+                                     'Apiaceae',
+                                     'Corylus avellana',
+                                     'Allium'),
+                          labels = c('Chocolate',
+                                     'Rosaceae (strawberry, brambles, rose)',
+                                     'Pistachio',
+                                     'Lamiales (basil, oregano, lemon balm, \nKorean mint, sage, sesame, thyme, rosemary)',
+                                     'Corn',
+                                     'Peppers (bell, paprika)',
+                                     'Coconut',
+                                     'Oat',
+                                     'Rice',
+                                     'Walnut',
+                                     'Poaceae (rye, wheat)',
+                                     'Coriander/cilantro',
+                                     'Pepper (black)',
+                                     'Blueberry',
+                                     'Raspberry',
+                                     'Apiaceae (carrot, parsnip, fennel,\nparsnip, parsley)',
+                                     'Hazelnut', 
+                                     'Allium (leek, scallion, chive)'))) %>% 
+     ggplot(aes(x = Sample, y = Abundance, fill = name)) +
+     geom_bar(stat = 'identity', 
+              position = 'stack', 
+              color = 'black',
+              size = 0.25) +
+     scale_fill_manual(values = c('#B66353',
+                                  '#D37295',
+                                  '#B9CA5D',
+                                  '#55AD89',
+                                  '#F0BD27',
+                                  '#E15759',
+                                  '#BAB0AC',
+                                  '#FFBE7D',
+                                  'white',
+                                  '#9D7660',
+                                  '#F1CE63',
+                                  '#59A14F',
+                                  '#79706E',
+                                  '#4E79A7',
+                                  '#FF9D9A',
+                                  '#F28E2B',
+                                  '#D7B5A6',
+                                  '#8CD17D')) +
+     theme(axis.text.x = element_blank(),
+           axis.ticks.x = element_blank(),
+           legend.position = 'right',
+           legend.title = element_blank(),
+           panel.grid.major = element_blank(),
+           panel.grid.minor = element_blank())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'abundance plots', 
+            paste0(plotID, '_Low and high trnL richness example.pdf')),
+       height = 5, width = 6)
+```
+
+```{r}
+# Convert variable types for cleaner plotting
+melt %>% 
+     filter(Sample %in% c('POMMS-1', 'CHOMP-180')) %>% 
+     filter(Abundance > 0) %>% 
+     ggplot(aes(x = Sample, y = Abundance, fill = name)) +
+     geom_bar(stat = 'identity', position = 'stack',
+              fill = 'white', color = 'black',
+              size = 0.25) +
+     theme(axis.text.x = element_blank(),
+           axis.ticks.x = element_blank(),
+           legend.position = 'right',
+           legend.title = element_blank(),
+           panel.grid.major = element_blank(),
+           panel.grid.minor = element_blank())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results', 
+            'abundance plots', 
+            paste0(plotID, '_Low and high trnL richness example (no color).pdf')),
+       height = 5, width = 3)
+```
+
+## Extremes of intake
+
+Given some results different on either side of a read count threshold, want to understand: Do samples *look* appreciably different at high/low richness?
+
+### Relative abundance
+
+```{r}
+# Randomly sample 10 from each bin
+set.seed(2021)
+samples <- 
+     alpha %>% 
+     group_by(reads_food_binned) %>% 
+     sample_n(size = 10)
+```
+
+```{r}
+# Get melted data for these samples
+melt <- 
+     ps %>% 
+     prune_samples(samples$name, .) %>%
+     psmelt()
+
+# Add binned reads
+melt <- 
+     alpha %>% 
+     select(Sample = name, reads_food_binned) %>% 
+     right_join(melt)
+```
+
+```{r}
+# Convert variable types for cleaner plotting
+ggplot(melt, aes(x = Sample, y = Abundance)) +
+     geom_bar(stat = 'identity', position = 'fill', 
+              color = 'black', fill = 'white') +
+     facet_wrap(~reads_food_binned, 
+                scales = 'free_x',
+                nrow = 1) + 
+     # scale_fill_manual(values = colors.vec) +
+     theme_classic() + 
+     theme(axis.text.x = element_blank(),
+           axis.ticks.x = element_blank(),
+           legend.position = 'top',
+           plot.margin = margin(0.5, 0.5, 0.5, 0.5, "in"))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+pdf(here('results', 'abundance plots',
+         paste0(plotID, 
+                '_Relative abundances, 10 samples per read count bin.pdf')),
+    height = 5, 
+    width = 20)
+
+ggplot(melt, aes(x = Sample, y = Abundance)) +
+     geom_bar(stat = 'identity', position = 'fill', 
+              color = 'black', fill = 'white') +
+     facet_wrap(~reads_food_binned, 
+                scales = 'free_x',
+                nrow = 1) + 
+     # scale_fill_manual(values = colors.vec) +
+     theme_classic() + 
+     theme(axis.text.x = element_blank(),
+           axis.ticks.x = element_blank(),
+           legend.position = 'top',
+           plot.margin = margin(0.5, 0.5, 0.5, 0.5, "in"))
+
+```
+Based on this, looks like we accumulate more low-proportion things at higher read depth (>10,000).
+
+Might be nice to color by family to see if there are trends in what turns up over time.
+

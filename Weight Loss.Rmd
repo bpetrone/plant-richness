@@ -10,10 +10,7 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 ```
 
 ```{r libraries, include=FALSE, echo=FALSE}
-library(car) # For vif()
-library(fitdistrplus)
 library(here)
-library(lme4) # For glmer()
 library(phyloseq)
 library(tidyverse)
 
@@ -435,16 +432,28 @@ alpha.joint %>%
 
 ###### Average error
 
-
 Don't think this is best with a model because it's actually not a 1:1 fit (e.g. the slope tells us pMR is a slight overestimate).  Maybe best to just calculate raw differences?
 
 ```{r}
+# Average error
 alpha.joint %>% 
+     # filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
      select(-c(threshold, obs_rare)) %>% 
      distinct() %>% 
      mutate(diff = obs - obs_menu) %>% 
      pull(diff) %>% 
-     # abs() %>% 
+     mean()
+```
+
+```{r}
+# Absolute error
+alpha.joint %>% 
+     # filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) %>% 
+     select(-c(threshold, obs_rare)) %>% 
+     distinct() %>% 
+     mutate(diff = obs - obs_menu) %>% 
+     pull(diff) %>% 
+     abs() %>%
      mean()
 ```
 
@@ -473,6 +482,15 @@ mean(abs(mod$residuals))
 ```
 
 ###### No weekends
+
+```{r}
+# How many weekends are there?
+alpha.joint %>% 
+     select(-c(threshold, obs_rare)) %>% 
+     distinct() %>% 
+     filter(weekday_menu %in% c('Saturday', 'Sunday'))
+```
+
 
 ```{r}
 alpha.joint %>% 

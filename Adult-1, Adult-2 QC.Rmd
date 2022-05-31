@@ -120,6 +120,15 @@ Then below, can just filter by desired threshold in order to calculate measures.
 samdf <- data.frame(ps@sam_data)
 ```
 
+## Taxon counts
+
+```{r}
+alpha %>% 
+     summarize(med = median(obs),
+               mad = mad(obs))
+```
+
+
 ## Compare between cohorts
 
 Here the options for comparing two counts are 
@@ -202,49 +211,57 @@ ggplot(data.frame(yhat = yhat,
 # Residual plots
 plot(yhat, residuals(model))
 ```
-
 #### Rarefied
 
 ```{r}
-ggplot(alpha, aes(x = study, y = obs_rare)) +
+alpha %>% 
+     filter(threshold == 1000) %>% 
+     ggplot(aes(x = study, y = obs_rare)) +
      geom_boxplot(width = 0.5) +
      labs(x = 'Cohort', y = 'pMR') +
      lims(y = c(0, 55))
 ```
 ```{r}
-wilcox.test(obs_rare ~ study,
-            data = ,
+alpha %>% 
+     filter(threshold == 1000) %>% 
+     wilcox.test(obs_rare ~ study,
+            data = .,
             conf.int = TRUE)
 ```
+
+```{r}
+model <- 
+     alpha %>% 
+     filter(threshold == 1000 & !is.na(obs_rare)) %>% 
+     lmer(obs_rare ~ study + (1 | subj),
+          data = .)
+
+summary(model)
+```
+
+Hmm, think I am doing something wrong here. Doesn't make sense that this is a bigger effect than the same analysis above on raw data?
 
 ### Depth v. richness
 
 ```{r}
-alpha <- 
-     samdf %>% 
-     rownames_to_column(var = 'row') %>% 
-     select(row, reads_food) %>% 
-     right_join(alpha, by = c('row' = 'name'))
-
-alpha 
-```
-
-```{r}
 ggplot(alpha, aes(x = reads_food, y = obs)) +
-     geom_point(alpha = 0.5) +
+     geom_point(alpha = 0.2) +
      facet_wrap(~study) +
      labs(x = 'Sequencing depth', y = 'pMR') +
      scale_x_continuous(label = comma) +
+     # scale_x_log10() +
+     # scale_y_log10() +
      theme(axis.text.x = element_text(angle = 20, hjust = 1))
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-# ggsave(here('results', 
-#             'manuscript', 
+# ggsave(here('results',
+#             'manuscript',
 #             'supplemental',
 #             'read depth',
-#             paste0(plotID, '_pMR x dequencing depth.pdf')),
-#        height = 3, width = 6)
+#             paste0(plotID, '_pMR x dequencing depth (log).pdf')),
+#        height = 3, width = 6,
+#        device = cairo_pdf)
 ```
 
 ## Relate to variables
@@ -529,8 +546,12 @@ Note that non-positive values aren't allowed for Gamma family.  Would need to tu
 
 ```{r}
 # Try a model with everything
+# f <- paste('reads_food ~ ',
+#            paste(vars, collapse = ' + '))
+
+# Without PCR batch
 f <- paste('reads_food ~ ',
-           paste(vars, collapse = ' + '))
+           paste(vars[!vars == 'pcr_batch_overall'], collapse = ' + '))
 
 f
 ```
@@ -541,6 +562,19 @@ m <- lm(f, data = samdf)
 
 ```{r}
 summary(m)
+```
+
+Ok, now try this same model with a subject effect added.
+
+```{r}
+f <- paste(f, '+ (1|subj)')
+f
+```
+
+```{r}
+m2 <- lmer(f, data = samdf)
+
+summary(m2)
 ```
 
 

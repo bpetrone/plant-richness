@@ -34,7 +34,7 @@ ps
 
 ```{r}
 alpha <- 
-     estimate_richness(ps, measures = c('Observed', 'Shannon')) %>% 
+     estimate_richness(ps, measures = 'Observed') %>% 
      # Clean up formatting
      rownames_to_column(var = 'name') %>% 
      mutate(name = gsub('\\.', '-', name))
@@ -56,75 +56,79 @@ alpha <-
 
 alpha
 ```
+
+```{r}
+# Join to rarefied data
+rarefaction.df <- 
+     readRDS(
+          here('data', 'processed', 'rarefaction',
+             'Rarefied trnL counts (5,000 or 10,500 reads).rds')
+          )
+```
+
+```{r}
+alpha <- 
+     rarefaction.df %>% 
+     select(-obs) %>% # Already computed above
+     full_join(alpha, .)
+
+rm(rarefaction.df)
+```
+
 ### vs. read counts
 
 ```{r}
-alpha.long <- pivot_longer(alpha, cols = c(Observed, Shannon), 
-                           names_to = 'measure', values_to = 'value')
+# Make long-form data for plotting
+alpha.long <- 
+     alpha %>% 
+     select(-starts_with('obs_rare_se')) %>% 
+     pivot_longer(cols = c(Observed, obs_rare_5000, obs_rare_10500),
+                  names_to = 'measure',
+                  values_to = 'value') 
 ```
 
 ```{r}
 ggplot(alpha.long, aes(x = reads_food, y = value)) +
      geom_point() +
+     facet_wrap(~measure) +
      labs(x = 'Read depth', y = 'Alpha diversity') +
-     facet_wrap(~measure, scales = 'free_y') +
      theme_bw()
 ```
-
 ```{r}
 cor.test(alpha$Observed, alpha$reads_food,
          alternative = 'greater',
          method = 'pearson')
 ```
 
-#### Repeat vs. read counts
-
 ```{r}
-alpha <- left_join(alpha, rarefaction.df,
-                   by = c('name', 'Observed' = 'obs'))
-```
-
-```{r}
-ggplot(alpha, aes(x = reads_food, y = obs_rare)) +
-     geom_point() +
-     labs(x = 'Read depth', y = 'Richness') +
-     theme_bw()
-```
-Is there still a correlation?
-```{r}
-cor.test(alpha$obs_rare, alpha$reads_food,
+cor.test(alpha$obs_rare_5000, alpha$reads_food,
          alternative = 'greater',
          method = 'pearson')
 ```
 
-Yes, but half as weak. (Same goes for Spearman, but overall stronger correlation).
+```{r}
+cor.test(alpha$obs_rare_10500, alpha$reads_food,
+         alternative = 'greater',
+         method = 'pearson')
+```
 
 ## By subject 
-
-```{r}
-# How well do observed and Shannon correlate with one another?
-ggplot(alpha, aes(Observed, Shannon)) +
-     geom_point() +
-     coord_fixed(ratio = max(alpha$Observed)/max(alpha$Shannon))
-```
-
-```{r}
-cor.test(alpha$Shannon, alpha$Observed, 
-         alternative = 'greater',
-         method = 'pearson')
-```
 
 ```{r}
 # Refactor subject IDs in order of descending median taxa observations
 alpha.stats <- 
      alpha %>% 
      group_by(subj) %>% 
-     summarize(med = median(Observed), sd = sd(Observed)) %>% 
+     summarize(med = median(obs_rare_10500, na.rm = TRUE), 
+               sd = sd(obs_rare_10500, na.rm = TRUE)) %>% 
      arrange(desc(med))
 
 alpha$subj <- factor(alpha$subj, levels = alpha.stats$subj)
+```
 
-ggplot(alpha, aes(x = subj, y = Observed)) +
+```{r}
+alpha %>% 
+     ggplot(aes(x = subj, y = obs_rare_10500)) +
      geom_boxplot() +
      facet_wrap(~study, scales = 'free_x') +
      labs(x = 'Participant') +
@@ -136,6 +140,7 @@ ggplot(alpha, aes(x = subj, y = Observed)) +
      )
 ```
 
+
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results', 'miniseq', 'Combined', 'alpha diversity',
@@ -145,25 +150,45 @@ ggsave(here('results', 'miniseq', 'Combined', 'alpha diversity',
 
 ```{r}
 alpha %>% 
-     filter(study %in% c('CHOMP', 'ONR')) %>% 
-     # filter(reads > 10000) %>% 
-     ggplot(aes(x = subj, y = Observed, fill = study)) +
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     ggplot(aes(x = subj, y = obs_rare_10500, fill = study)) +
      geom_boxplot() +
      # facet_wrap(~study, scales = 'free_x') +
-     labs(x = 'Participant') +
+     labs(x = 'Participant', y = 'trnL richness') +
+     scale_fill_manual(values = c('gray80', 'gray40')) +
      theme_bw() +
      theme(
           axis.text.x = element_blank(),
           axis.ticks.x = element_blank(), 
-          panel.grid.major.x = element_blank()
+          panel.grid.major.x = element_blank(),
+          legend.position = c(0.9,0.8),
+          legend.background = element_rect(color = 'black'),
+          legend.title = element_blank()
      )
+```
+
+```{r}
+adult.stats <- 
+     alpha %>% 
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     group_by(subj) %>% 
+     summarize(med = median(obs_rare_10500,
+                            na.rm = TRUE),
+               sd = sd(obs_rare_10500,
+                       na.rm = TRUE))
+
+range(adult.stats$med, na.rm = T)
+range(adult.stats$sd, na.rm = T)
 ```
 
 
 ```{r}
-# Factor by largest standard deviation instead
-```
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 
+ggsave(here('results', 'manuscript', '1',
+            paste0(plotID, '_B_Richness by subject, 5,000 read rarefaction.pdf')),
+       height = 4, width = 6)
+```
 
 
 How does this change with filtering out of low quality samples?

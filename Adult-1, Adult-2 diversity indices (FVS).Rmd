@@ -96,7 +96,7 @@ fvs <-
 ps <- 
      ps %>% 
      subset_samples(study %in% c('Adult-1', 'Adult-2')) %>% 
-     subset_samples(reads_food != 0) %>% 
+     # subset_samples(reads_food != 0) %>%
      prune_taxa(taxa_sums(.) > 0, .) 
 
 ps
@@ -246,7 +246,7 @@ fvs %>%
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results', 
             'manuscript',
-            '2',
+            '3',
             paste0(plotID, '_raw trnL richness x total FVS.pdf')),
        height = 2.5, width = 4)
 ```
@@ -269,11 +269,13 @@ fvs %>%
 # Raw data
 fvs %>% 
      select(-c(threshold, mean_rare)) %>% 
+     filter(pass_qc) %>% 
      distinct() %>% 
      ggplot(aes(x = fvs_plant_residual, y = mean)) +
      geom_point(size = 2, alpha = 0.6) +
      facet_wrap(~study,
                 nrow = 2) +
+     ylim(0, 26) +
      labs(x = 'FVS score residual\n(plant items)',
           y = 'Mean pMR')
 ```
@@ -281,7 +283,7 @@ fvs %>%
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results', 
             'manuscript',
-            '3',
+            '2',
             paste0(plotID, '_raw trnL richness x plant FVS.pdf')),
        device = cairo_pdf,
        height = 4, width = 2.5)
@@ -304,11 +306,13 @@ fvs %>%
 # Raw data
 fvs %>% 
      select(-c(threshold, mean_rare)) %>% 
+     filter(pass_qc) %>% 
      distinct() %>% 
      ggplot(aes(x = fvs_animal_residual, y = mean)) +
      geom_point(size = 2, alpha = 0.6) +
      facet_wrap(~study,
                 nrow = 2) +
+     ylim(0, 26) +
      labs(x = 'FVS score residual\n(animal items)',
           y = 'Mean pMR')
 ```
@@ -316,7 +320,7 @@ fvs %>%
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results', 
             'manuscript',
-            '3',
+            '2',
             paste0(plotID, '_raw trnL richness x animal FVS.pdf')),
        device = cairo_pdf,
        height = 4, width = 2.5)
@@ -334,7 +338,6 @@ fvs %>%
                             method = 'spearman')$p.value) 
             
 ```
-
 
 ### Rarefied data
 

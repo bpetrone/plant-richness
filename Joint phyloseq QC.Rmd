@@ -12,7 +12,7 @@ opts_knit$set(root.dir = file.path(getwd(), '..'))
 
 ```{r libraries, include=FALSE, echo=FALSE}
 library(here)
-library(iNEXT)
+# library(iNEXT)
 library(phyloseq)
 library(scales) # For label = comma
 library(tidyverse)
@@ -27,8 +27,10 @@ theme_set(theme_bw() +
                     axis.title = element_text(size = 14,
                                               face = 'bold'),
                     strip.text = element_text(size = 12,
-                                              face = 'bold')
-                     )
+                                              face = 'bold'),
+                    legend.title = element_text(size = 12,
+                                                face = 'bold'),
+                    legend.text = element_text(size = 11))
 )
 ```
 
@@ -93,7 +95,8 @@ failed <-
      mutate(n_failed = ifelse(is.na(n_failed),
                                     yes = 0,
                                     no = n_failed),
-            n_success = n_total - n_failed)
+            n_success = n_total - n_failed,
+            pct = n_success/n_total)
 
 failed
 ```
@@ -164,12 +167,41 @@ samdf %>%
 ```
 Ok, so think best to report median and median absolute deviation.
 
-## Number of taxa
+## Taxa
+
+### Number
 
 ```{r}
 # Total
 ntaxa(ps)
 ```
+
+```{r}
+# Per subject
+# Get each subject's mean alpha diversity
+alpha <-
+     ps %>% 
+     prune_samples(sample_sums(.) > 0, .) %>% 
+     otu_table() %>% 
+     data.frame() %>% 
+     apply(1, function(x){sum(x > 0)}) %>% 
+     data.frame(obs = .) %>% 
+     rownames_to_column(var = 'row') %>% 
+     left_join(samdf)
+
+# alpha <- 
+#      alpha %>% 
+#      group_by(study, subj) %>% 
+#      summarize(obs_mean = mean(obs))
+```
+
+```{r}
+median(alpha$obs)
+hist(alpha$obs)
+```
+
+
+### Most common
 
 ```{r}
 asvtab <- 
@@ -202,6 +234,27 @@ taxtab <-
 
 taxtab %>% 
      filter(asv %in% names(which(multiple)))
+```
+
+```{r}
+# How many samples have chocolate?
+choc <- 
+     prune_taxa('ATCCTATTATTTTATTATTTTACGAAACTAAACAAAGGTTCAGCAAGCGAGAATAATAAAAAAAG', ps) %>% 
+     sample_sums()
+
+sum(choc > 0)/(1001-24) # 24 samples w/no reads (failed)
+```
+
+```{r}
+# How many people have chocolate?
+choc <- 
+     ps %>% 
+     psmelt %>% 
+     filter(OTU == 'ATCCTATTATTTTATTATTTTACGAAACTAAACAAAGGTTCAGCAAGCGAGAATAATAAAAAAAG') %>% 
+     group_by(subj, OTU) %>% 
+     summarize(detected = any(Abundance > 0))
+
+table(choc$detected)
 ```
 
 ### Reads mapped
@@ -241,30 +294,6 @@ Ooh-- definitely need to follow up on this.
 ```{r}
 samdf %>% 
      select(study, row, starts_with('reads')) %>% 
-     filter(reads_tot >= 1000) %>% 
-     mutate(pct_no_id = 1 - (reads_food/reads_tot)) %>% 
-     ggplot(aes(x = pct_no_id)) +
-     geom_histogram() +
-     facet_wrap(~study) +
-     labs(y = 'Frequency', x = 'Unidentified reads (%)')
-```
-
-```{r}
-plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
-
-# ggsave(here('results',
-#             'manuscript',
-#             'supplemental',
-#             'read depth',
-#             paste0(plotID, '_Unassigned reads by study (histogram).pdf')),
-#        height = 4, width = 5)
-```
-
-Maybe another vis, to make outliers clearer?
-
-```{r}
-samdf %>% 
-     select(study, row, starts_with('reads')) %>% 
      # filter(reads_tot >= 1000) %>% 
      mutate(pct_no_id = 1 - (reads_food/reads_tot)) %>% 
      # Color those higher than dataset average 
@@ -292,6 +321,17 @@ ggsave(here('results',
        device = cairo_pdf,
        height = 3, width = 6)
 ```
+
+```{r}
+samdf %>% 
+     select(study, row, starts_with('reads')) %>% 
+     mutate(pct_no_id = 1 - (reads_food/reads_tot)) %>% 
+     summarize(median = median(pct_no_id,
+                               na.rm = TRUE),
+               mad = mad(pct_no_id,
+                         na.rm = TRUE))
+```
+
 
 ## Read count threshold
 
@@ -325,25 +365,23 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ```
 
 ```{r}
-ggplot(samdf, aes(x = reads_food, y = ..density.., 
-                  color = study, fill = study)) +
-     geom_density(aes(color = study),
-                  alpha = 0.5,
-                  size = 1.5) +
-     scale_color_manual(values = c('darkgreen', 
-                                   'gray80', 
-                                   'gray40', 
-                                   'gold2')) +
-     scale_fill_manual(values = c('darkgreen', 
-                                  'gray80', 
-                                  'gray40', 
-                                  'gold2')) +
-     labs(x = 'Read count (food taxa)', y = 'Samples (n)') +
-     theme_bw() +
-     theme(legend.title = element_blank())
+# Range of values in each study
+samdf %>% 
+     group_by(study) %>% 
+     summarize(min = min(reads_tot),
+               max = max(reads_tot))
 ```
 
-Need to hold off on this for now-- not informative I think unless scaled to actual size of the cohorts. 
+```{r}
+# What about after removing zeros?
+samdf %>% 
+     filter(reads_food > 0) %>% 
+     group_by(study) %>% 
+     summarize(min = min(reads_tot),
+               max = max(reads_tot),
+               mean = mean(reads_tot),
+               sd = sd(reads_tot))
+```
 
 ### Relationship to input
 
@@ -352,15 +390,10 @@ Need to hold off on this for now-- not informative I think unless scaled to actu
 ```{r}
 ggplot(samdf, aes(x = ng_added, y = reads_tot)) +
      geom_point(alpha = 0.5) +
-     # geom_hline(yintercept = 10000,
-     #            color = 'red',
-     #            linetype = 'dashed') +
-     # geom_vline(xintercept = 10,
-     #            color = 'red',
-     #            linetype = 'dashed') +
      facet_wrap(~seq_date, 
                 nrow = 2) +
      labs(y = 'Reads', x = 'DNA added to pool (ng)') + 
+     scale_y_continuous(label = comma) +
      theme_bw()
 ```
 
@@ -373,6 +406,28 @@ ggsave(here('results',
             'read depth',
             paste0(plotID, '_Read depth v ng added.pdf')),
        height = 4, width = 6)
+```
+
+```{r}
+# Concerning PCR batch is #1 from 20210322: examine this more closely
+samdf %>% 
+     filter(seq_date == '20210322') %>% 
+     mutate(pcr_batch = factor(pcr_batch)) %>% 
+     ggplot(aes(x = ng_added, y = reads_tot, color = pcr_batch)) +
+     geom_point(alpha = 0.8) +
+     labs(y = 'Reads', x = 'DNA added to pool (ng)', color = 'Batch') + 
+     scale_y_continuous(label = comma) +
+     theme_bw()
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+ggsave(here('results',
+            'manuscript',
+            'supplemental',
+            'read depth',
+            paste0(plotID, '_20210322 Batch 1.pdf')),
+       height = 3, width = 4)
 ```
 
 ```{r}
@@ -498,44 +553,335 @@ ggplot(samdf, aes(x = qubit, y = reads_tot)) +
                 linetype = 'dashed') +
      facet_wrap(~seq_date, nrow = 2) +
      labs(y = 'Reads', x = 'Qubit reading') + 
-     theme_bw()
+     scale_y_continuous(label = comma)
+```
+```{r}
+# Make custom batch variable and curate for plotting
+samdf.batch <- 
+     samdf %>% 
+     filter(!over_threshold) %>%
+     mutate(
+          # Missing data for DFC
+          pcr_batch = ifelse(seq_date == '20191206',
+                             yes = '1',
+                             no = pcr_batch),
+          # Make combined batch name
+          batch = paste(seq_date, pcr_batch, sep = '_'))
+
+# How many samples in each?
+samdf.batch %>% 
+     group_by(batch) %>% 
+     count()
+```
+
+```{r}
+format_x <- function(x){
+     format(round(x, 1), nsmall=1)
+}
+
+# Maybe try only those with >10 samples?
+samdf %>% 
+     filter(!over_threshold) %>% 
+     mutate(
+          # Missing data for DFC
+          pcr_batch = ifelse(seq_date == '20191206',
+                             yes = '1',
+                             no = pcr_batch),
+          seq_date = factor(seq_date, 
+                              labels = 0:7)) %>% 
+     group_by(seq_date) %>% 
+     mutate(size = length(seq_date),
+            pcr_batch = factor(pcr_batch)) %>% 
+     filter(size >= 10) %>%
+     ggplot(aes(x = qubit, y = reads_tot)) +
+     geom_smooth(method = lm,
+                 aes(color = seq_date != 6)) +
+     geom_point(alpha = 0.5) +
+     facet_wrap(~seq_date, nrow = 2,
+                scales = 'free') +
+     labs(y = 'Reads', x = 'Post-PCR\nconcentration (ng/ul)',
+          color = 'Significant\nlinear fit') + 
+     scale_color_manual(values = c('#e15759', '#59a14f')) +
+     scale_y_continuous(labels = comma) +
+     scale_x_continuous(labels = format_x) +
+     theme(axis.text.x = element_text(size = 8),
+           axis.text.y = element_text(size = 8),
+           legend.position = c(1,0),
+           legend.justification = c(1,0))
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+ggsave(here('results',
+            'manuscript',
+            'supplemental',
+            'read depth',
+            paste0(plotID, '_Read depth v Qubit below pooling threshold.pdf')),
+       device = cairo_pdf,
+       height = 4, width = 8)
+```
+
+```{r}
+# Maybe try only those with >10 samples?
+samdf %>% 
+     mutate(seq_date = factor(seq_date, 
+                              labels = 1:8)) %>% 
+     group_by(seq_date) %>% 
+     mutate(size = length(seq_date),
+            pcr_batch = factor(pcr_batch)) %>% 
+     # filter(size >= 10) %>% 
+     ggplot(aes(x = qubit, y = reads_tot)) +
+     geom_point(alpha = 0.5) +
+     facet_wrap(~seq_date, nrow = 2,
+                scales = 'free') +
+     labs(y = 'Reads', x = 'Qubit reading') + 
+     scale_y_continuous(labels = comma) +
+     scale_x_continuous(labels = format_x) +
+     theme(axis.text.x = element_text(size = 8),
+           axis.text.y = element_text(size = 8))
+```
+
+```{r}
+samdf %>% 
+     filter(!over_threshold) %>% 
+     group_by(seq_date) %>% 
+     summarize(
+          rho = cor.test(~qubit + reads_tot)$estimate,
+          p = cor.test(~qubit + reads_tot)$p.value
+     ) %>% 
+     mutate(p_bh = p.adjust(p, method = 'BH'))
+```
+```{r}
+samdf %>% 
+     filter(over_threshold) %>% 
+     group_by(seq_date) %>% 
+     summarize(
+          rho = cor.test(~qubit + reads_tot)$estimate,
+          p = cor.test(~qubit + reads_tot)$p.value
+     ) %>% 
+     mutate(p_bh = p.adjust(p, method = 'BH'))
+```
+
+```{r}
+# What about with a linear model?
+results.df <- 
+     data.frame(seq_date = NULL,
+                threshold = NULL,
+                r2 = NULL,
+                intercept_b = NULL,
+                intercept_p = NULL,
+                qubit_b = NULL,
+                qubit_p = NULL)
+
+for (d in unique(samdf$seq_date)){
+     # Model: above threshold
+     above <- 
+          samdf %>% 
+          filter(over_threshold) %>% 
+          filter(seq_date == d) %>% 
+          lm(reads_tot ~ qubit, data = .)
+     
+     # Model: below threshold
+     below <- 
+          samdf %>% 
+          filter(!over_threshold) %>% 
+          filter(seq_date == d) %>% 
+          lm(reads_tot ~ qubit, data = .)
+     
+     above.df <- 
+          data.frame(seq_date = d,
+                     threshold = 'Above',
+                     r2 = summary(above)$r.squared,
+                     intercept_b = summary(above)$coefficients[1,1],
+                     intercept_p = summary(above)$coefficients[1,4],
+                     qubit_b = summary(above)$coefficients[2,1],
+                     qubit_p = summary(above)$coefficients[2,4])
+     
+     below.df <- 
+          data.frame(seq_date = d,
+                     threshold = 'Below',
+                     r2 = summary(below)$r.squared,
+                     intercept_b = summary(below)$coefficients[1,1],
+                     intercept_p = summary(below)$coefficients[1,4],
+                     qubit_b = summary(below)$coefficients[2,1],
+                     qubit_p = summary(below)$coefficients[2,4])
+     
+     results.df <- 
+          bind_rows(results.df,
+                    above.df,
+                    below.df)
+}
+```
+
+```{r}
+# Recode significance level
+results.df <- 
+     results.df %>% 
+     mutate(across(.cols = ends_with('_p'),
+                   .fns = ~ifelse(.x <= 0.05,
+                                   yes = TRUE,
+                                   no = FALSE)))
+
+# Pivot longer
+results.df <-
+     results.df %>%
+     pivot_longer(cols = c('intercept_b',
+                           'qubit_b'),
+                  names_to = 'term',
+                  values_to = 'coeff') %>% 
+     mutate(term = gsub(term, 
+                        pattern = '_b',
+                        replacement = ''),
+            signif = ifelse(term == 'intercept',
+                            yes = intercept_p,
+                            no = qubit_p)) %>% 
+     select(-ends_with('_p'))
+```
+
+```{r}
+# Visualize
+results.df %>% 
+     filter(signif) %>% 
+ggplot(aes(x = seq_date, y = coeff, fill = threshold)) +
+     geom_col(position = 'dodge') +
+     facet_wrap(~term) +
+     labs(x = 'Sequencing batch',
+          y = 'Coefficient value') +
+     theme(axis.text.x = element_text(angle = 45,
+                                      hjust = 1))
+```
+
+```{r}
+ggplot(results.df, aes(x = seq_date, y = r2, fill = threshold)) +
+     geom_col(position = 'dodge') +
+     labs(x = 'Sequencing batch',
+          y = 'Coefficient value') +
+     theme(axis.text.x = element_text(angle = 45,
+                                      hjust = 1))
+```
+
+### Relationship to diet surveys
+
+For Adult-1 and Adult-2, check against FVS, hPDI scores
+
+```{r}
+# Read in this data
+ffq <- 
+     here('data', 
+          'processed', 
+          'DHQ3',
+          'Adult-1 and Adult-2 dietary indices.csv') %>% 
+     read_csv()
+```
+
+```{r}
+ffq <- 
+     samdf %>% 
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     select(study, subj, reads_tot, over_threshold) %>% 
+     right_join(ffq) %>% 
+     mutate(over_1k = ifelse(reads_tot >= 1000,
+                             yes = 'Over\n1,000\nreads',
+                             no = 'Under\n1,000\nreads'),
+            over_1k = factor(over_1k,
+                             levels = c('Under\n1,000\nreads',
+                                        'Over\n1,000\nreads')))
+```
+
+Really neat:
+- HEI plant significant, HEI non-plant not
+- PDI, uPDI significant and opposite directions, hPDI not
+- FVS plant residuals significant, animal residuals unrelated
+
+```{r}
+ggplot(ffq, aes(x = over_1k, y = hei_plant_all)) +
+     geom_boxplot() +
+     labs(y = 'HEI-2015\n(plant component)') +
+     ylim(7, 35) +
+     theme(axis.title.x = element_blank())
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 
-# ggsave(here('results',
-#             'manuscript',
-#             'supplemental',
-#             'read depth',
-#             paste0(plotID, '_Read depth v Qubit, with threshold.pdf')),
-#        height = 4, width = 6)
-```
-
-Now, can filter out points to the right of this line and test for relationship.
-
-```{r}
-table(samdf$over_threshold)
+ggsave(here('results',
+            'manuscript',
+            'supplemental',
+            'rarefaction-extrapolation',
+            paste0(plotID, '_HEI over-under 1,000 reads.pdf')),
+       height = 4, width = 2.5)
 ```
 
 ```{r}
-samdf %>% 
-     filter(over_threshold == FALSE) %>% 
-     group_by(seq_date) %>% 
-     summarize(
-          rho = cor.test(~qubit + reads_tot)$estimate,
-          p = cor.test(~qubit + reads_tot)$p.value
-     ) %>% 
-     mutate(p_bh = p.adjust(p, method = 'BH'))
+wilcox.test(hei_plant_all ~ over_1k, ffq,
+            conf.int = TRUE)
+```
+
+```{r}
+wilcox.test(hei_non_plant ~ over_1k, ffq,
+       conf.int = TRUE)
+```
+
+```{r}
+ggplot(ffq, aes(x = over_1k, y = PDI)) +
+     geom_boxplot() +
+     labs(y = '\nPDI') +
+     ylim(40, 80) +
+     theme(axis.title.x = element_blank())
 ```
 ```{r}
-samdf %>% 
-     filter(over_threshold == TRUE) %>% 
-     group_by(seq_date) %>% 
-     summarize(
-          rho = cor.test(~qubit + reads_tot)$estimate,
-          p = cor.test(~qubit + reads_tot)$p.value
-     ) %>% 
-     mutate(p_bh = p.adjust(p, method = 'BH'))
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+ggsave(here('results',
+            'manuscript',
+            'supplemental',
+            'rarefaction-extrapolation',
+            paste0(plotID, '_PDI over-under 1,000 reads.pdf')),
+       height = 4, width = 2.5)
+```
+
+```{r}
+wilcox.test(PDI ~ over_1k, ffq,
+            conf.int = TRUE)
+```
+
+```{r}
+wilcox.test(hPDI ~ over_1k, ffq,
+       conf.int = TRUE)
+```
+
+```{r}
+wilcox.test(uPDI ~ over_1k, ffq,
+            conf.int = TRUE)
+```
+
+```{r}
+ggplot(ffq, aes(x = over_1k, y = fvs_plant_residual)) +
+     geom_boxplot() +
+     labs(y = 'FVS score residuals\n(plant items)') +
+     ylim(-13, 33) +
+     theme(axis.title.x = element_blank())
+```
+
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+ggsave(here('results',
+            'manuscript',
+            'supplemental',
+            'rarefaction-extrapolation',
+            paste0(plotID, '_FVS plant residual over-under 1,000 reads.pdf')),
+       height = 4, width = 2.5)
+```
+
+```{r}
+wilcox.test(fvs_plant_residual ~ over_threshold, ffq,
+            conf.int = TRUE)
+```
+
+```{r}
+wilcox.test(fvs_animal_residual ~ over_threshold, ffq,
+            conf.int = TRUE)
 ```
 
 ### Effect on richness
@@ -550,6 +896,12 @@ melt <-
      group_by(study, seq_date, Sample, reads_tot, qubit) %>% 
      filter(Abundance > 0) %>% 
      count()
+```
+
+```{r}
+ggplot(melt, aes(x = reads_tot, y = n)) + 
+     geom_point(alpha = 0.5) +
+     facet_wrap(~study) 
 ```
 
 ```{r}
@@ -970,6 +1322,7 @@ ggplot(rarefaction.df, aes(x = obs, y = obs_rare)) +
      coord_equal() +
      labs(x = 'pMR (raw)', y = 'pMR (rarefied)')
 ```
+This is maybe a visualization that appears better than reality, since I'm not showing the points that are removed from the dataset? 
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 
@@ -983,11 +1336,11 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 
 ```{r}
 # Save rarefied data
-# saveRDS(rarefaction.df,
-#         here('data',
-#              'processed',
-#              'rarefaction',
-#              'Rarefied trnL counts.rds'))
+saveRDS(rarefaction.df,
+        here('data', 
+             'processed',
+             'rarefaction',
+             'Rarefied trnL counts.rds'))
 ```
 
 Now, try repeating read count plots and alpha diversity with rarefied data. 
@@ -1027,12 +1380,9 @@ alpha$study <-
 # Plot
 ggplot(alpha, aes(x = study, y = obs_mean, group = study)) +
      geom_boxplot() +
-     theme_classic() +
-     labs(y = '*trnL* richness') +
+     labs(y = 'pMR') +
      theme(axis.title.x = element_blank(),
-           axis.title.y = ggtext::element_markdown(size = 14,
-                                                   face = 'bold'),
-           axis.text = element_text(size = 12))
+           axis.text = element_text(angle = 20, hjust = 1))
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
@@ -1040,8 +1390,8 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results', 
             'manuscript', 
             '5',
-            paste0(plotID, '_A_Raw trnL richness by study.pdf')),
-       height = 4, width = 4)
+            paste0(plotID, 'Raw pMR by study.pdf')),
+       height = 4, width = 2.5)
 ```
 
 
@@ -1061,11 +1411,14 @@ TukeyHSD(result.anova)
 Do on a per-subject basis, so one subject having more samples doesn't weight the data unfairly.
 
 ```{r}
-# Normalize within each subject
+# Normalize withineach subject
 stats.rare <- 
-     rarefaction.df %>% 
-     group_by(study, subj) %>% 
-     summarize(obs_rare_mean = mean(obs_rare))
+     samdf %>% 
+     select(name = row, study, subj) %>% 
+     right_join(rarefaction.df) %>% 
+     group_by(study, subj, threshold) %>% 
+     summarize(obs_rare_mean = mean(obs_rare, na.rm = TRUE)) %>% 
+     filter(obs_rare_mean != 'NaN')
 ```
 
 ```{r}
@@ -1082,12 +1435,10 @@ stats.rare$study <-
 # Plot
 ggplot(stats.rare, aes(x = study, y = obs_rare_mean, group = study)) +
      geom_boxplot() +
-     theme_classic() +
-     labs(y = 'Rarefied *trnL* richness') +
+     labs(y = 'Rarefied pMR') +
+     facet_wrap(~threshold) +
      theme(axis.title.x = element_blank(),
-           axis.title.y = ggtext::element_markdown(size = 14,
-                                                   face = 'bold'),
-           axis.text.x = element_text(size = 12))
+           axis.text.x = element_text(angle = 20, hjust = 1))
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
@@ -1095,14 +1446,17 @@ plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results', 
             'manuscript', 
             '5',
-            paste0(plotID, '_A_Rarefied trnL richness by study.pdf')),
-       height = 4, width = 4)
+            paste0(plotID, '_Rarefied pMR by study.pdf')),
+       height = 4, width = 6)
 ```
 
 
 ```{r}
-result.anova <- aov(obs_rare_mean ~ study,
-                    data = stats.rare)
+result.anova <- 
+     stats.rare %>% 
+     filter(threshold == 10000) %>% 
+     aov(obs_rare_mean ~ study,
+                    data = .)
 
 summary(result.anova)
 ```

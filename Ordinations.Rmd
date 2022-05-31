@@ -17,47 +17,64 @@ library(tidyverse)
 library(vegan)
 ```
 
-## Load input data
+## Read in data
 
 ```{r}
 # Joint phyloseq object
 ps <- 
-     here('data', 'processed', 'phyloseq', '20210408_ps_trnL.rds') %>% 
+     here('data', 'processed', 'phyloseq', 'trnL_combined_ps.rds') %>% 
      readRDS()
 
 ps
 ```
 
-## Transform
+## Pre-process
+
+### Filter?
+
+## Analysis
+
+### PCoA on Jaccard
 
 ```{r}
-# Add pseudocount before relative abundance transform
-otu_table(ps) <- otu_table(ps) + 1
+# Colorblind-friendly palette
+pal <- brewer.pal(11, 'PiYG')
 ```
 
 ```{r}
-# CLR
-asvtab <- otu_table(ps)@.Data
-asvtab.clr <- driver::clr(asvtab)
-
-# Replace names, but remember these aren't interpretable as strict ASVs any longer
-colnames(asvtab.clr) <- colnames(asvtab)
-
-# Make updated phyloseq object
-ps.clr <- phyloseq(otu_table(asvtab.clr, taxa_are_rows = FALSE),
-                   sample_data(sample_data(ps)),
-                   tax_table(tax_table(ps)))
+# Refactor sample data, so CHOMP, ONR samples in background
+sample_data(ps)$study <- factor(sample_data(ps)$study,
+                                levels = c('Weight Loss',
+                                           'Adult-1',
+                                           'Adult-2',
+                                           'Adolescent'))
 ```
-
-## PERMANOVA
 
 ```{r}
-samdf <- data.frame(ps.clr@sam_data)
-samdf
+# Try using phyloseq wrapper
+ord <- ordinate(ps, method = 'PCoA', distance = 'jaccard', binary = TRUE)
+plot_ordination(ps, ord, color = 'study') +
+     scale_color_manual(values = c(pal[2], 
+                                   'gray30', 
+                                   'gray70',
+                                   pal[8])) +
+     labs(x = 'PCo (principal co-ordinate) 1 (10.3%)',
+          y = 'PCo 2 (6.4%)',
+          color = 'Cohort') +
+     coord_equal() +
+     theme_bw()
 ```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+
+ggsave(here('results', 'ordination',
+            paste0(plotID, '_Overall trnL composition by study, foods only with glomming, PCoA on Jaccard.pdf')),
+       height = 4)
+```
+
 ```{r}
 # Sequencing batch
-vegan::adonis(distance(ps.clr, method = 'euclidean') ~ seq_date, 
+vegan::adonis(distance(ps, method = 'jaccard') ~ seq_date, 
               data = samdf)
 ```
 

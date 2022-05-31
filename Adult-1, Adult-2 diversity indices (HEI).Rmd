@@ -96,6 +96,7 @@ hei <-
 ps <- 
      ps %>% 
      subset_samples(study %in% c('Adult-1', 'Adult-2')) %>% 
+     subset_samples(reads_food > 0) %>% 
      prune_taxa(taxa_sums(.) > 0, .)
 
 ps
@@ -118,8 +119,8 @@ add <-
      select(row, study, subj, CH_week, ONR_day) 
 
 alpha <- 
-    left_join(alpha, add,
-              by = c('name' = 'row'))
+    left_join(add, alpha,
+              by = c('row' = 'name'))
 ```
 
 ### Mean richness
@@ -141,13 +142,13 @@ Subset to PDI values only
 ```{r}
 hei <- 
      hei %>% 
-     select(study, subj, kcal,
+     select(study, subj, kcal, pass_qc,
             matches('hei')) 
 ```
 
 # Analyze
 
-## PDI
+## HEI
 
 ```{r}
 # Join mean richness to HEI data
@@ -158,42 +159,67 @@ hei <- left_join(alpha.mean, hei)
 
 ```{r}
 # Select relevant columns, get in long form
-pdi.long <- 
-     pdi %>% 
-     pivot_longer(cols = matches('pdi'),
+hei.long <- 
+     hei %>% 
+     pivot_longer(cols = matches('hei'),
                   names_to = 'index', 
                   values_to = 'value')
 
-pdi.long$index <- factor(pdi.long$index,
-                         levels = c('PDI', 'hPDI', 'uPDI'))
+hei.long$index <- factor(hei.long$index,
+                         levels = c('hei_plant_all', 'hei_non_plant'),
+                         labels = c('HEI (plant)',
+                                    'HEI (non-plant)'))
 ```
+
+#### Raw
 ```{r}
-pdi.long %>% 
+hei.long %>% 
      select(-c(threshold, mean_rare)) %>% 
-     filter(index == 'hPDI') %>% 
+     filter(index == 'HEI (plant)' & pass_qc) %>% 
      distinct() %>% 
      ggplot(aes(x = value, y = mean)) +
-     geom_point(size = 2, alpha = 0.8) +
-     facet_wrap(~study,
-                nrow = 2) +
+     geom_point(size = 2, alpha = 0.6) +
+     facet_wrap(~study, nrow = 2) +
+     ylim(0, 26) +
      labs(y = 'Mean pMR',
-          x = 'hPDI\n') 
-     
+          x = 'HEI-2015\n(plant component)') 
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results',
             'manuscript',
-            '3',
-            paste0(plotID, '_raw trnL richness x hPDI.pdf')),
+            '2',
+            paste0(plotID, '_raw trnL richness x HEI.pdf')),
        device = cairo_pdf,
        height = 4, width = 2.5)
 ```
 
 ```{r}
-# Raw
-pdi.long %>% 
+hei.long %>% 
      select(-c(threshold, mean_rare)) %>% 
+     filter(index == 'HEI (non-plant)' & pass_qc) %>% 
+     distinct() %>% 
+     ggplot(aes(x = value, y = mean)) +
+     geom_point(size = 2, alpha = 0.6) +
+     facet_wrap(~study, nrow = 2) +
+     ylim(0, 26) +
+     labs(y = 'Mean pMR',
+          x = 'HEI-2015 (non-plant\ncomponents)') 
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            '2',
+            paste0(plotID, '_raw trnL richness x HEI (animal).pdf')),
+       device = cairo_pdf,
+       height = 4, width = 2.5)
+```
+
+```{r}
+hei.long %>% 
+     select(-c(threshold, mean_rare)) %>% 
+     filter(pass_qc) %>%
      distinct() %>% 
      group_by(study, index) %>% 
      summarize(rho = cor.test(~ value + mean,
@@ -203,3 +229,25 @@ pdi.long %>%
      mutate(p_adj = p.adjust(p, method = 'BH'))
 ```
 
+#### Rarefied
+
+```{r}
+hei.long %>% 
+     filter(index == 'HEI (plant)') %>% 
+     ggplot(aes(x = value, y = mean_rare)) +
+     geom_point(size = 2, alpha = 0.8) +
+     facet_grid(vars(study),
+                vars(threshold)) +
+     labs(y = 'Mean pMR',
+          x = 'HEI component') 
+```
+```{r}
+hei.long %>% 
+     filter(pass_qc & threshold == 1000) %>% 
+     group_by(study, index) %>% 
+     summarize(rho = cor.test(~ value + mean_rare,
+                           method = 'spearman')$estimate,
+               p = cor.test(~ value + mean_rare,
+                            method = 'spearman')$p.value) %>% 
+     mutate(p_adj = p.adjust(p, method = 'BH'))
+```

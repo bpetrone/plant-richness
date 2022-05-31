@@ -1,0 +1,241 @@
+---
+title: "Adult-1, Adult-2 nutrient relationships"
+output: html_notebook
+---
+
+# Setup
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = file.path(getwd(), '..'))
+```
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(fitdistrplus)
+library(here)
+library(lme4) # For glmer()
+library(phyloseq)
+library(tidyverse)
+
+# Make dplyr select the default
+select <- dplyr::select
+```
+
+# Load data
+
+## trnL richness (+/- rarefaction)
+
+```{r}
+alpha <- 
+     here('data', 
+          'processed', 
+          'rarefaction',
+          'Rarefied trnL counts (10,500 reads).rds') %>% 
+     readRDS()
+```
+
+## FFQ data
+
+This is processed in a separate notebook ("Adult-1, Adult-2 diet survey data").  All nutrient and food group calories are present both in raw form and in an amount per 1,000-kcal in the diet.
+
+```{r}
+ffq <- 
+     here('data', 
+          'processed',
+          'DHQ3', 
+          'Adult-1 and Adult-2 FFQ with per-1000-kcal calculated nutrients.csv'
+          ) %>% 
+     read_csv()
+```
+
+# Pre-process
+
+## Metabarcoding data
+
+```{r}
+# Subset to Weight Loss samples and metadata only
+alpha <- 
+     alpha %>% 
+     filter(study %in% c('Adult-1', 'Adult-2')) %>% 
+     # Drop columns that are all NA
+     select(
+          where(function(x){ 
+               !all(is.na(x))
+          })
+     ) %>% 
+      # Re-order remainder
+     select(
+          study,
+          subj,
+          obs, 
+          threshold, 
+          starts_with('obs_rare')
+          ) %>% 
+     # Convert subject to factor
+     mutate(subj = factor(subj)) %>% 
+     arrange(study, subj)
+
+alpha
+```
+## Diet survey data
+
+```{r}
+# Crude filter: refine later
+ffq <- 
+     filter(ffq, 
+            !(`Energy (kcal)` < 500 | `Energy (kcal)` > 3500))
+```
+
+This has a lot of columns: subset to only those we'll use downstream: calories, macronutrients, and fiber.
+
+```{r}
+ffq <- 
+     select(ffq,
+            subj,
+            `Energy (kcal)`,
+            starts_with('Carbohydrate (g)'),
+            starts_with('Total fat (g)'),
+            starts_with('Protein (g)'),
+            starts_with('Dietary fiber (g)'),
+            starts_with('Energy from'))
+```
+
+# Analyze
+
+## Relationship to macronutrient intake
+
+### Each sample independently
+
+```{r}
+trnL.ffq.individual <- 
+     left_join(alpha, ffq)
+```
+
+```{r}
+# Create a skewness-kurtosis plot to find the best distrubution for your data
+descdist(trnL.ffq.individual$obs_rare, discrete = FALSE, boot = 500)
+```
+
+```{r}
+##fit your data to a variety of distributions to doublecheck the above results. 
+##Make determination based on Q-Q plot
+fit.norm <- fitdist(trnL.ffq.individual$obs_rare, "norm")
+fit.gamma <- fitdist(trnL.ffq.individual$obs_rare, "gamma")
+fit.weibull <- fitdist(trnL.ffq.individual$obs_rare, "weibull")
+
+##look at the plots
+plot(fit.norm)
+plot(fit.gamma)
+plot(fit.weibull)
+```
+
+```{r}
+# Try as a linear model? 
+fit1 <- glm(obs_rare ~ 
+                `Energy (kcal)` +
+                `Total fat (g)_per_1000kcal` +
+                `Carbohydrate (g)_per_1000kcal` +
+                `Protein (g)_per_1000kcal`,
+           family = Gamma(link = 'identity'),
+           data = trnL.ffq.individual)
+
+summary(fit1)
+```
+
+Also tried a log link: AIC 2447.7.  Deviance and residual deviance are the same.
+
+```{r}
+# Now, fit a model with subject as random effect
+fit2 <- glmer(obs_rare ~ 
+                `Energy (kcal)` +
+                `Total fat (g)_per_1000kcal` +
+                `Carbohydrate (g)_per_1000kcal` +
+                `Protein (g)_per_1000kcal` + 
+                 (1 | subj),
+           family = Gamma(link = 'identity'),
+           data = trnL.ffq.individual)
+
+summary(fit2)
+```
+
+Ok, so predictors are very different scale:
+
+```{r}
+predictors <- c('Energy (kcal)',
+                'Total fat (g)_per_1000kcal',
+                'Carbohydrate (g)_per_1000kcal',
+                'Protein (g)_per_1000kcal')
+
+select(trnL.ffq.individual, one_of(predictors)) %>% 
+     apply(2, range, na.rm = TRUE)
+```
+
+```{r}
+# Re-scale and center
+trnL.ffq.individual <- 
+     trnL.ffq.individual %>% 
+     mutate(across(one_of(predictors),
+                   scale,
+                   .names = '{.col}_scale'))
+```
+
+```{r}
+# Now try again with these scaled variables
+fit2 <- glmer(obs_rare ~ 
+                `Energy (kcal)_scale` +
+                `Total fat (g)_per_1000kcal_scale` +
+                `Carbohydrate (g)_per_1000kcal_scale` +
+                `Protein (g)_per_1000kcal_scale` + 
+                 (1 | subj),
+           family = Gamma(link = 'identity'),
+           data = trnL.ffq.individual)
+
+summary(fit2)
+```
+
+### Average richness
+
+```{r}
+# Combine richness estimates and FFQ data
+trnL.ffq.average <- 
+     alpha %>% 
+     group_by(subj) %>% 
+     summarize(obs_mean = mean(obs_rare)) %>% 
+     left_join(ffq)
+```
+
+```{r}
+# Try as a linear model? 
+fit1 <- glm(obs_mean ~ 
+                `Energy (kcal)` +
+                `Total fat (g)_per_1000kcal` +
+                `Carbohydrate (g)_per_1000kcal` +
+                `Protein (g)_per_1000kcal`,
+           family = Gamma(link = 'identity'),
+           data = trnL.ffq.average)
+
+summary(fit1)
+```
+
+### Visualize
+
+```{r}
+ggplot(trnL.ffq.average, aes(x = `Energy (kcal)`, y = obs_mean)) +
+     geom_point()
+```
+```{r}
+ggplot(trnL.ffq.average, aes(x = `Carbohydrate (g)_per_1000kcal`, y = obs_mean)) +
+     geom_point()
+```
+```{r}
+ggplot(trnL.ffq.average, aes(x = `Protein (g)_per_1000kcal`, y = obs_mean)) +
+     geom_point()
+```
+```{r}
+ggplot(trnL.ffq.average, 
+       aes(x = `Dietary fiber (g)_per_1000kcal`, y = obs_mean)) +
+     geom_point()
+```
+
+## Relationship to HEI
+
+## Relationship to

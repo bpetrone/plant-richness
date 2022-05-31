@@ -93,6 +93,7 @@ pdi <-
 ps <- 
      ps %>% 
      subset_samples(study %in% c('Adult-1', 'Adult-2')) %>% 
+     subset_samples(reads_food > 0) %>%
      prune_taxa(taxa_sums(.) > 0, .)
 
 ps
@@ -115,8 +116,8 @@ add <-
      select(row, study, subj, CH_week, ONR_day) 
 
 alpha <- 
-    left_join(alpha, add,
-              by = c('name' = 'row'))
+    left_join(add, alpha,
+              by = c('row' = 'name'))
 ```
 
 Then below, can just filter by desired threshold in order to calculate measures.
@@ -140,7 +141,7 @@ Subset to PDI values only
 ```{r}
 pdi <- 
      select(pdi,
-            study, subj, kcal,
+            study, subj, pass_qc,
             matches('PDI'))
 ```
 
@@ -155,11 +156,13 @@ pdi <-
      left_join(pdi)
 ```
 
+### Totals
+
 ```{r}
 # Select relevant columns, get in long form
 pdi.long <- 
      pdi %>% 
-     pivot_longer(cols = matches('pdi'),
+     pivot_longer(cols = c(PDI, hPDI, uPDI),
                   names_to = 'index', 
                   values_to = 'value')
 
@@ -183,22 +186,45 @@ pdi.long %>%
 ```{r}
 pdi.long %>% 
      select(-c(threshold, mean_rare)) %>% 
-     filter(index == 'hPDI') %>% 
+     filter(index == 'hPDI' & pass_qc) %>% 
      distinct() %>% 
      ggplot(aes(x = value, y = mean)) +
-     geom_point(size = 2, alpha = 0.8) +
+     geom_point(size = 2, alpha = 0.6) +
      facet_wrap(~study,
                 nrow = 2) +
+     ylim(0, 26) +
      labs(y = 'Mean pMR',
           x = 'hPDI\n') 
-     
 ```
 ```{r}
 plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
 ggsave(here('results',
             'manuscript',
-            '3',
+            '2',
             paste0(plotID, '_raw trnL richness x hPDI.pdf')),
+       device = cairo_pdf,
+       height = 4, width = 2.5)
+```
+
+```{r}
+pdi.long %>% 
+     select(-c(threshold, mean_rare)) %>% 
+     filter(index == 'uPDI' & pass_qc) %>% 
+     distinct() %>% 
+     ggplot(aes(x = value, y = mean)) +
+     geom_point(size = 2, alpha = 0.6) +
+     facet_wrap(~study,
+                nrow = 2) +
+     ylim(0, 26) +
+     labs(y = 'Mean pMR',
+          x = 'uPDI\n') 
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            '2',
+            paste0(plotID, '_raw trnL richness x uPDI.pdf')),
        device = cairo_pdf,
        height = 4, width = 2.5)
 ```
@@ -208,6 +234,7 @@ ggsave(here('results',
 pdi.long %>% 
      select(-c(threshold, mean_rare)) %>% 
      distinct() %>% 
+     filter(pass_qc) %>%
      group_by(study, index) %>% 
      summarize(rho = cor.test(~ value + mean,
                            method = 'spearman')$estimate,
@@ -215,40 +242,19 @@ pdi.long %>%
                             method = 'spearman')$p.value) %>% 
      mutate(p_adj = p.adjust(p, method = 'BH'))
 ```
-
 
 ```{r}
 # Rarefied
 pdi.long %>% 
      filter(threshold == 1000) %>% 
+     filter(pass_qc) %>% 
      group_by(study, index) %>% 
-     summarize(rho = cor.test(~ value + mean,
+     summarize(rho = cor.test(~ value + mean_rare,
                            method = 'spearman')$estimate,
-               p = cor.test(~ value + mean,
+               p = cor.test(~ value + mean_rare,
                             method = 'spearman')$p.value) %>% 
      mutate(p_adj = p.adjust(p, method = 'BH'))
             
-```
-
-```{r}
-pdi.long %>% 
-     filter(study == 'Adult-1') %>% 
-     group_by(index) %>% 
-     summarize(rho = cor.test(~ value + obs_rare,
-                           method = 'spearman')$estimate,
-               p = cor.test(~ value + obs_rare,
-                            method = 'spearman')$p.value) %>% 
-     mutate(p_adj = p.adjust(p, method = 'BH'))
-```
-```{r}
-pdi.long %>% 
-     filter(study == 'Adult-2') %>% 
-     group_by(index) %>% 
-     summarize(rho = cor.test(~ value + obs_rare,
-                           method = 'spearman')$estimate,
-               p = cor.test(~ value + obs_rare,
-                            method = 'spearman')$p.value) %>% 
-     mutate(p_adj = p.adjust(p, method = 'BH'))
 ```
 
 #### Linear fit
@@ -329,65 +335,66 @@ pdi %>%
      summarize(across(.fns = list(mean = mean, sd = sd)))
 ```
 
-## vs. ASA24
+### Residuals
+
+Have calculated residuals for hPDI and uPDI, but overall PDI does not have a relationship to calorie intake.
 
 ```{r}
-# Concatenate richness measures
-recall.rows <- 
-     select(recall, subj = ID, starts_with('richness')) %>% 
-     pivot_longer(cols = starts_with('richness'),
-                  names_to = 'category',
-                  values_to = 'value') %>% 
-     mutate(category = gsub('richness_', '', category))
+# Select relevant columns, get in long form
+pdi.long <- 
+     pdi %>% 
+     pivot_longer(cols = c(hPDI_residual, uPDI_residual),
+                  names_to = 'index', 
+                  values_to = 'value')
 
-trnL.rows <- 
-     rare.df %>% 
-     filter(study == 'Adult-1') %>% 
-     select(subj, value = obs_rare) %>% 
-     mutate(category = 'plant')
-
-recall.rows$measure = '24-hour recall'
-trnL.rows$measure = 'Metabarcoding'
-
-trnL.v.asa <- 
-     bind_rows(recall.rows, trnL.rows)
+pdi.long$index <- factor(pdi.long$index)
 ```
 
 ```{r}
-trnL.v.asa %>% 
-     filter(category == 'plant') %>% 
-     ggplot(aes(x = subj, y = value, color = measure)) +
-     # geom_point()
-     geom_boxplot() +
-     theme_bw() +
-     theme(axis.text.x = element_text(angle = 20, hjust = 1))
+pdi.long %>% 
+     select(-c(threshold, mean_rare)) %>% 
+     distinct() %>% 
+     ggplot(aes(x = value, y = mean, color = pass_qc)) +
+     geom_point(size = 2, alpha = 0.8) +
+     facet_wrap(~study + index,
+                nrow = 2) +
+     labs(y = 'Mean pMR',
+          x = 'hPDI\n') 
+     
+```
+```{r}
+plotID <- paste(Sys.Date(), as.character(sample(000:999,1)), sep=".")
+ggsave(here('results',
+            'manuscript',
+            '3',
+            paste0(plotID, '_raw trnL richness x hPDI.pdf')),
+       device = cairo_pdf,
+       height = 4, width = 2.5)
 ```
 
 ```{r}
-# Try averaging within each participant to get one value
-trnL.v.asa.avg <- 
-     trnL.v.asa %>% 
-     filter(category == 'plant') %>% 
-     group_by(measure, subj) %>% 
-     summarize(mean = mean(value)) %>% 
-     pivot_wider(names_from = 'measure',
-                 values_from = 'mean')
+# Raw
+pdi.long %>% 
+     select(-c(threshold, mean_rare)) %>%
+     filter(pass_qc) %>% 
+     distinct() %>% 
+     group_by(study, index) %>% 
+     summarize(rho = cor.test(~ value + mean,
+                           method = 'spearman')$estimate,
+               p = cor.test(~ value + mean,
+                            method = 'spearman')$p.value) 
 ```
 
 ```{r}
-ggplot(trnL.v.asa.avg, aes(x = `24-hour recall`, y = Metabarcoding)) +
-     geom_point() +
-     xlim(0, 20) + ylim(0, 20) +
-     coord_equal()
+# Rarefied
+pdi.long %>%
+     filter(pass_qc & threshold == 1000) %>% 
+     group_by(study, index) %>% 
+     summarize(rho = cor.test(~ value + mean_rare,
+                           method = 'spearman')$estimate,
+               p = cor.test(~ value + mean_rare,
+                            method = 'spearman')$p.value) 
 ```
-Consider: haven't filtered data for completeness?
-
-```{r}
-cor.test(trnL.v.asa.avg$`24-hour recall`, 
-         trnL.v.asa.avg$Metabarcoding,
-         method = 'spearman')
-```
-
 ## Backwards selection
 
 Organize as a function, so that can be run on both Adult-1 and Adult-2 cohorts, with the results compared.
