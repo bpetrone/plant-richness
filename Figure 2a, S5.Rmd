@@ -5,6 +5,8 @@ output:
     df_print: paged
     fig_height: 3
     fig_width: 3
+    toc: true
+    toc_float: true
 ---
 
 # Setup
