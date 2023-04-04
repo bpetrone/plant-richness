@@ -1,0 +1,340 @@
+---
+title: "Figure 2a, S5"
+output:
+  html_document:
+    df_print: paged
+    fig_height: 3
+    fig_width: 3
+---
+
+# Setup
+
+```{r echo=FALSE, include=FALSE}
+library(phyloseq)
+library(tidyverse)
+```
+
+```{r echo=FALSE, include=FALSE}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold')
+               )
+)
+```
+
+# Load data
+
+```{r}
+# trnL
+ps <- readRDS('data/phyloseq_trnL.rds')
+alpha <- readRDS('data/alpha.rds')
+
+# Menu phyloseq object 
+ps.menu <- readRDS('data/phyloseq_WeightLoss_menu.rds')
+```
+
+# Pre-process
+
+```{r}
+# Subset to successfully sequenced Weight Loss samples, and consider raw (not rarefied) data
+ps <- subset_samples(ps, study == 'Weight Loss') 
+ps <- prune_samples(sample_sums(ps) > 0, ps)
+
+alpha <- 
+     alpha |> 
+     filter(name %in% sample_names(ps) & rarefied=='Raw') |> 
+     select(-rarefied)
+```
+
+```{r}
+# Bind to Weight Loss metadata: subject and date
+samdf <- 
+     data.frame(ps@sam_data) |> 
+     rownames_to_column(var = 'row')
+
+alpha <- 
+     samdf |> 
+     select(name = row, subj, date) |> 
+     right_join(alpha) |> 
+     select(name, subj, date, everything())
+
+alpha
+```
+
+```{r}
+# Add link to menu day at varying lag by labeling each stool sample with two preceding days as SUBJ_DATE
+for (delta in 1:2){
+     varname <- paste0('delta', delta)
+     alpha <- mutate(alpha, 
+                     !!varname := date - delta)
+}
+
+alpha
+```
+
+```{r}
+# Menu phyloseq: Filter to plants only
+ntaxa(ps.menu)
+ps.menu <- subset_taxa(ps.menu, kingdom == 'Viridiplantae')
+ntaxa(ps.menu)
+
+# Add weekday to sample data (to filter out weekend reporting)
+sample_data(ps.menu)$weekday <- weekdays(sample_data(ps.menu)$date)
+```
+
+```{r}
+# Menu phyloseq: Calculate richness
+alpha.menu <- 
+     ps.menu |> 
+     otu_table() |> 
+     slot('.Data') |> 
+     apply(1, 
+           function(x){sum(x > 0)})  
+
+# Reformat
+alpha.menu <- 
+     data.frame(obs_menu = alpha.menu) |> 
+     rownames_to_column(var = 'row') |> 
+     separate(row, 
+              into = c('subj', 'date_menu'), 
+              sep = '_') |> 
+     mutate(date_menu = as.Date(date_menu),
+            weekday_menu = weekdays(date_menu))
+```
+
+# Analyze richness
+
+## 1 and 2 prior days
+
+```{r}
+# Make joint object linking today's stool to two days of prior menu counts
+alpha.joint <-
+     alpha |>
+     select(-name) |> 
+     pivot_longer(cols = starts_with('delta'),
+                  names_to = 'delta',
+                  values_to = 'date_menu') |>
+     mutate(delta = gsub(delta,
+                         pattern = 'delta',
+                         replacement = '')) |>
+     left_join(alpha.menu) |> 
+     rename(Menu=obs_menu,
+            trnL=value)
+
+head(alpha.joint)
+```
+
+```{r}
+# Filter out weekend days, average taxa from two prior menu days
+alpha.joint <-
+     alpha.joint |>
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) |>
+     group_by(subj, date, measure) |>
+     summarize(trnL=unique(trnL),
+               Menu=mean(Menu))
+
+alpha.joint
+```
+```{r}
+# Full analysis with richness
+alpha.pmr <- filter(alpha.joint, measure == 'Richness')
+```
+
+```{r}
+alpha.pmr |> 
+     ggplot(aes(x = Menu, y = trnL)) + 
+     geom_point(size = 2, alpha = 0.6) +
+     geom_abline(slope = 1, intercept = 0,
+                 linetype = 'dashed',
+                 color = '#E15759') +
+     xlim(8, 52) + ylim(8, 52) +
+     coord_equal() +
+     labs(x = "Plant taxa\n(Two prior menu days)", 
+          y = 'pMR\n(stool sample)') +
+     theme(legend.position = 'none')
+```
+```{r}
+# ggsave('Fig 2a.pdf', device = cairo_pdf, height = 3, width = 3)
+```
+
+```{r}
+# Spearman correlation (all measures, for main text and Table S2)
+alpha.joint |> 
+     group_by(measure) |> 
+     summarize(rho = cor.test(~ trnL + Menu, 
+                        method = 'spearman')$estimate,
+               p = cor.test(~ trnL + Menu, 
+                        method = 'spearman')$p.value) |> 
+     mutate(p_BH = p.adjust(p, method = 'BH'))
+```
+## Two future days
+
+```{r}
+# Make joint object linking today's stool to two days of prior menu counts
+alpha.next <-
+     alpha |>
+     filter(measure == 'Richness') |> 
+     select(subj, date, value) |> 
+     mutate(delta_1 = date + 1,
+            delta_2 = date + 2) |> 
+     pivot_longer(cols = starts_with('delta'),
+                  names_to = 'delta',
+                  values_to = 'date_menu') |> 
+     mutate(delta = gsub(delta,
+                         pattern = 'delta_',
+                         replacement = '')) |> 
+     # Now, a join will happen for both 1 and 2 days ahead
+     left_join(select(alpha.menu,
+                      subj,
+                      date_menu = date_menu,
+                      weekday_menu = weekday_menu,
+                      obs_menu = obs_menu)) 
+
+alpha.next
+```
+```{r}
+# Remove weekends, summarize
+alpha.next <- 
+     alpha.next |> 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) |> 
+     group_by(subj, date) |> 
+     summarize(trnL = unique(value),
+               Menu = mean(obs_menu, na.rm = TRUE)) |> 
+     ungroup() 
+```
+
+```{r}
+ggplot(alpha.next, aes(x = Menu, y = trnL)) + 
+     geom_point(size = 2, alpha = 0.6) +
+     xlim(8, 52) + ylim(8, 52) +
+     labs(x = "Plant taxa\n(Two future menu days)", 
+          y = 'pMR') +
+     coord_equal() 
+```
+
+```{r}
+# ggsave('Fig S5a.pdf', device = cairo_pdf, height = 3, width = 3)
+```
+
+```{r}
+cor.test(~ trnL + Menu, 
+         alpha.next,
+         method = 'spearman') 
+```
+
+## Two random days
+
+How about with a random day (any day)?
+
+```{r}
+alpha.rand <- 
+     alpha |>
+     filter(measure == 'Richness') |> 
+     select(subj, date, value) 
+
+dim(alpha.rand)
+```
+
+64 entries, a raw and rarefied one for each sample.  Want to pick 32 pairs of accompanying consecutive menu dates at random
+
+```{r}
+set.seed(2345) 
+
+# Pick a random row to join
+i <- 
+     seq(1:nrow(alpha.menu)) |> 
+     sample(32)
+
+menu.rand <- 
+     alpha.menu[i, ] |> 
+     select(subj,
+            ends_with('menu')) |> 
+     mutate(delta = 1)
+
+# Get its paired day
+menu.rand <- 
+     menu.rand |> 
+     # Step back one day
+     mutate(date_menu = date_menu - 1,
+            weekday_menu = weekdays(date_menu)) |> 
+     select(subj, date_menu, weekday_menu) |> 
+     # Join to menu record
+     left_join(select(alpha.menu, subj, ends_with('menu'))) |> 
+     # Add to first days' data
+     mutate(delta = 2) |> 
+     bind_rows(menu.rand) |> 
+     rename(subj_rand = subj) |> 
+     # Group pairs together
+     arrange(subj_rand, desc(date_menu)) 
+
+menu.rand
+```
+
+```{r}
+set.seed(3456)
+
+# Need to randomly shuffle pairs before joining, otherwise subjects will line up alphabetically
+i <- sample(seq(1, 63, by = 2))
+
+menu.rand <- bind_rows(menu.rand[i,],
+                       menu.rand[i + 1,])
+
+# Now, join to existing data
+alpha.rand <- 
+     # Duplicate each entry
+     bind_rows(alpha.rand, alpha.rand) |> 
+     # Bind to menu
+     bind_cols(menu.rand) |> 
+     arrange(subj, date) |> 
+     rename(trnL = value,
+            Menu = obs_menu)
+
+# Now every sample should be linked with a random pair of dates
+alpha.rand
+```
+```{r}
+# Filter out weekends, summarize
+alpha.rand <- 
+     alpha.rand |> 
+     filter(!(weekday_menu %in% c('Saturday', 'Sunday'))) |> 
+     group_by(subj, date) |> 
+     summarize(trnL = unique(trnL),
+               Menu = mean(Menu)) 
+```
+
+```{r}
+ggplot(alpha.rand, aes(x = Menu, y = trnL)) + 
+     geom_point(size = 2, alpha = 0.6) +
+     xlim(8, 52) + ylim(8, 52) +
+     labs(x = "Plant taxa\n(Two random menu days)", 
+          y = 'pMR') +
+     coord_equal() 
+```
+
+```{r}
+cor.test(~ trnL + Menu,
+         data = alpha.rand,
+         method = 'spearman')
+```
+
+```{r}
+# ggsave('Fig S5b.pdf', device = cairo_pdf, height = 3, width = 3)
+```
+
+## Outliers
+
+```{r}
+alpha.pmr |> 
+     mutate(diff = trnL - Menu) |> 
+     ungroup() |> 
+     summarize(median = median(diff),
+               mad = mad(diff))
+```
+```{r}
+alpha.pmr |> 
+     mutate(diff = trnL - Menu) |> 
+     filter(diff > 1.25 + (2*4.81845) | diff < 1.25 - (1*4.81845))
+```
