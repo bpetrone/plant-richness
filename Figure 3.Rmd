@@ -1,0 +1,695 @@
+---
+title: "Figure 3bc"
+output:
+  html_document:
+    df_print: paged
+    fig_width: 5
+    fig_height: 3.5
+    toc: true
+    toc_float: true
+---
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(fitdistrplus)
+library(lme4) # For glmer
+library(lmerTest)
+library(patchwork)
+library(phyloseq)
+library(tidyverse)
+
+select <- dplyr::select
+```
+
+```{r include=FALSE, echo=FALSE}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    legend.title = element_text(size = 12,
+                                                face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
+# Read in data
+```{r}
+# Full trnL phyloseq object
+ps <- readRDS('data/phyloseq_trnL.rds')
+
+# Alpha diversity estimates
+alpha <- readRDS('data/alpha.rds')
+```
+
+# Pre-process
+
+```{r}
+# Filter trnL data to successfully sequenced Adolescent samples
+ps <- subset_samples(ps, study == 'Adolescent') 
+ps <- prune_samples(sample_sums(ps) > 0, ps)
+
+# Move forward with pMR only
+alpha <- 
+     alpha |> 
+     filter(grepl(name, pattern = 'POMMS')) |> 
+     filter(measure == 'Richness' & rarefied == 'Raw') |> 
+     select(-rarefied)
+```
+
+```{r}
+# Adolescent demographic data
+samdf <- 
+     ps@sam_data |> 
+     data.frame() |> 
+     rownames_to_column(var = 'row') |> 
+     filter(study == 'Adolescent') |> 
+     select(row:reads_tot, R24_id:reads_food)  # Adolescent metadata
+```
+
+### Completeness
+
+Check completeness of model covariates.  
+
+```{r}
+# Do all subjects have an entry timepoint?
+n_distinct(samdf$subj)
+
+samdf |> 
+     filter(timepoint == 'Entry') |> 
+     nrow()
+```
+
+Almost, but not everyone.  So will group by subject below rather than just filtering to one timepoint. 
+
+```{r}
+# Check only one measure per subject
+samdf |>
+     group_by(subj, ethnicity) |> 
+     count() |> 
+     ungroup() |> 
+     group_by(ethnicity) |> 
+     count()
+```
+
+```{r}
+samdf |> 
+     group_by(subj, sex) |> 
+     count() |> 
+     ungroup() |> 
+     group_by(sex) |> 
+     count()
+```
+
+```{r}
+samdf |> 
+     group_by(subj, race) |> 
+     count() |> 
+     ungroup() |> 
+     group_by(race) |> 
+     count()
+```
+
+```{r}
+# Recode these to reduce categories with small number
+# Mixed-race responses as "Multiple"
+samdf$race[grep(' ', samdf$race)] <- 'Multiple'
+
+samdf |> 
+     group_by(subj, race) |> 
+     count() |> 
+     ungroup() |> 
+     group_by(race) |> 
+     count()
+```
+
+```{r}
+samdf |> 
+     group_by(subj, casecontrol) |> 
+     count() |> 
+     ungroup() |> 
+     group_by(casecontrol) |> 
+     count()
+```
+
+#### SES indicators
+
+```{r}
+samdf |> 
+     group_by(subj, ses) |> 
+     count() |> 
+     ungroup() |> 
+     group_by(ses) |> 
+     count()
+```
+
+```{r}
+# Make "any" category for worry/actual insecurity
+samdf <- 
+     mutate(
+          samdf,
+          across(.cols = c(worry, actual),
+                 .fns = ~ ifelse(.x != 'Never true',
+                                 yes = 'Yes',
+                                 no = 'No'),
+                 .names = '{.col}_ever'
+                 )
+     )
+```
+
+```{r}
+samdf |> 
+     group_by(subj, actual_ever) |> 
+     count() |> 
+     ungroup() |> 
+     group_by(actual_ever) |> 
+     count()
+```
+
+```{r}
+# Recode NA as Unknown so these aren't discarded from the model
+samdf$ses[is.na(samdf$ses)] <- 'Unknown'
+samdf$worry_ever[is.na(samdf$worry_ever)] <- 'Unknown'
+samdf$actual_ever[is.na(samdf$actual_ever)] <- 'Unknown'
+```
+
+#### Age
+
+```{r}
+# Age into quartiles by year, as in POMMS group analysis
+samdf <- 
+     samdf |> 
+     mutate(age_years = floor(age_days/365),
+            age_q = cut(age_years,
+                        breaks = 4))
+
+samdf |> 
+     group_by(subj, age_q) |> 
+     count() |> 
+     ungroup() |> 
+     group_by(age_q) |> 
+     count()
+```
+
+If age not available from one of the samples, take it from another:
+
+```{r}
+correction <- 
+     samdf |> 
+     group_by(subj) |> 
+     summarize(n_age_q = n_distinct(age_q)) |> 
+     filter(n_age_q == 2)
+
+samdf |> 
+     filter(subj %in% correction$subj) |> 
+     select(subj, starts_with('age')) |> 
+     arrange(subj)
+```
+Okay, so some of these are appropriately when the participant's age has changed.  We want to just keep those that are NA. 
+
+```{r}
+# Get a list of subjects for which we'll replace one value with the other
+correction <- 
+     samdf |> 
+     filter(subj %in% correction$subj) |> 
+     select(subj, starts_with('age')) |> 
+     group_by(subj) |> 
+     summarize(na.present = any(is.na(age))) |> 
+     filter(na.present == TRUE) |> 
+     pull(subj)
+
+length(correction)
+```
+
+Awesome!! This is exactly the same as the number of missing values above.  
+
+```{r}
+samdf |> 
+     filter(subj %in% correction) |> 
+     select(subj, timepoint, starts_with('age')) |> 
+     arrange(subj, desc(timepoint))
+```
+Manually inspected and for all of these it's the 6 month timepoint missing. So add half a year (183 d) to their age_days variable, then convert.
+
+```{r}
+correction.df <- 
+     samdf |> 
+     filter(subj %in% correction) |> 
+     filter(timepoint == 'Entry') |> 
+     select(subj, timepoint, age_days) |> 
+     mutate(timepoint = '6 months',
+            age_days_corr = age_days + 183) |> 
+     select(subj, timepoint, ends_with('corr'))
+
+correction.df
+```
+```{r}
+# Bind to sample data and replace values if needed
+samdf <- 
+     samdf |> 
+     select(-age) |> 
+     left_join(correction.df) |> 
+     mutate(age_days = 
+                 ifelse(is.na(age_days),
+                        yes = age_days_corr,
+                        no = age_days)) 
+
+# Peek at results
+samdf |> 
+     filter(subj %in% correction.df$subj) |> 
+     select(subj, starts_with('age')) |> 
+     arrange(subj)
+
+# Now, can drop corrected column, recalculate 
+samdf <- 
+     samdf |> 
+     select(-age_days_corr) |> 
+          mutate(age_years = floor(age_days/365),
+            age_q = cut(age_years,
+                        breaks = 4))
+```
+
+```{r}
+# Any missing now? 
+samdf |> 
+     group_by(subj, age_q) |> 
+     count() |> 
+     ungroup() |> 
+     group_by(age_q) |> 
+     count()
+```
+
+```{r}
+# Convert to 10s of years for better visualization
+samdf$age_decades <- samdf$age_days/365/10 
+```
+
+#### Set reference
+
+```{r}
+class(samdf$sex)
+
+samdf$sex <- factor(samdf$sex,
+                          levels = c('M', 'F'))
+
+levels(samdf$sex)
+```
+
+```{r}
+class(samdf$race)
+
+samdf$race <- factor(samdf$race,
+                     levels = c('WH', 
+                                'BL', 
+                                'AS', 
+                                'Multiple'))
+
+levels(samdf$race)
+```
+
+```{r}
+class(samdf$ethnicity)
+
+samdf$ethnicity <- factor(samdf$ethnicity,
+                          levels = c('NH', 'HI'))
+
+levels(samdf$ethnicity)
+```
+
+```{r}
+samdf$age_q <- as.ordered(samdf$age_q)
+levels(samdf$age_q)
+```
+
+```{r}
+class(samdf$casecontrol)
+
+samdf$casecontrol <- factor(samdf$casecontrol,
+                          levels = c('Control', 'Case'))
+
+levels(samdf$casecontrol)
+```
+
+```{r}
+class(samdf$ses)
+
+samdf$ses <- 
+     factor(samdf$ses,
+            levels = c('<24,999',
+                       '25,000-49,999',
+                       '50,000-74,999',
+                       '75,000-99,999',
+                       '>100,000',
+                       'Unknown')) 
+levels(samdf$ses)
+```
+
+```{r}
+class(samdf$actual_ever)
+
+samdf$actual_ever <- 
+     factor(samdf$actual_ever,
+            levels = c('No',
+                       'Yes',
+                       'Unknown')) 
+
+levels(samdf$actual_ever)
+```
+
+## Join
+
+```{r}
+# Pull from sample data, and join to results
+alpha <- 
+     samdf |> 
+     select(row, 
+            subj,
+            timepoint,
+            casecontrol,
+            age_decades, 
+            sex,
+            race,
+            ethnicity,
+            ses,
+            worry_ever,
+            actual_ever) |> 
+     right_join(alpha,
+                by = c('row'='name'))
+
+alpha
+```
+
+# Analyze
+
+```{r}
+# Per subject median, MAD
+alpha |> 
+     group_by(subj) |> 
+     summarize(value = mean(value)) |> 
+     ungroup() |> 
+     summarize(med = median(value),
+               mad = mad(value))
+```
+
+## Model: pMR response
+
+```{r}
+# Filter to Entry timepoint
+dim(alpha)
+alpha.subset <- filter(alpha, timepoint == 'Entry') 
+dim(alpha.subset)
+```
+
+```{r}
+# Check distribution of response variable
+descdist(alpha.subset$value, discrete = TRUE, boot = 500)
+```
+
+```{r}
+# Check distribution
+p.pmr.hist <- 
+     ggplot(alpha.subset, aes(x = value)) +
+     geom_histogram(binwidth = 2,
+                    boundary = 0) +
+     labs(x = 'pMR\n', y = 'Frequency') +
+     theme(panel.grid.minor = element_blank())
+
+p.pmr.hist
+```
+```{r}
+# QQ plot
+qqnorm(alpha.subset$value, pch = 1, frame = FALSE)
+qqline(alpha.subset$value, col = "steelblue", lwd = 2)
+```
+
+```{r}
+f = "value ~ age_decades + sex + race + ethnicity + casecontrol + ses + actual_ever"
+
+model <- lm(f,
+            data = alpha.subset)
+
+summary(model)
+```
+
+### Plot betas
+
+```{r}
+# Get confidence intervals
+cis <- 
+     confint(model) |> 
+     data.frame() |> 
+     rownames_to_column(var = 'covar') 
+
+# Get beta hat and p from model
+betas <- 
+     summary(model)$coeff[, c(1, 4)] |> 
+     data.frame() |> 
+     rownames_to_column(var = 'covar') 
+
+betas <- 
+     full_join(betas, cis) |> 
+     rename(p = Pr...t..,
+            CI2.5 = X2.5..,
+            CI97.5 = X97.5..)
+
+betas
+rm(cis)
+```
+
+```{r}
+# Assign covariate grouping
+betas$group <- NULL
+betas$group[grepl(pattern = 'age|race|sex|ethnicity',
+                  betas$covar)] <- 'Demographic'
+betas$group[grepl(pattern = 'case',
+                  betas$covar)] <- 'Clinical'
+betas$group[grepl(pattern = 'ses|ever',
+                  betas$covar)] <- 'Socioeconomic'
+
+betas$group <- factor(betas$group,
+                      levels = c('Socioeconomic',
+                                 'Clinical',
+                                 'Demographic'))
+```
+
+```{r}
+# Refactor by values of Estimate
+betas <- 
+     betas |> 
+     arrange(group, covar)
+```
+
+```{r}
+# Recode names for more interpretable plot
+betas$covar <- 
+     factor(betas$covar,
+            levels = c('actual_everUnknown',
+                       'actual_everYes',
+                       'sesUnknown',
+                       'ses>100,000',
+                       'ses75,000-99,999',
+                       'ses50,000-74,999',
+                       'ses25,000-49,999',
+                       'casecontrolCase',
+                       'ethnicityHI',
+                       'raceMultiple',
+                       'raceAS',
+                       'raceBL',
+                       'sexF',
+                       'age_decades',
+                       '(Intercept)'),
+            labels = c('foodinsecUnknown',
+                       'foodinsecYes',
+                       'incomeUnknown',
+                       'income>100K',
+                       'income75-99K',
+                       'income50-74K',
+                       'income25-49K',
+                       'casecontrolCase',
+                       'ethnicityHispanic',
+                       'raceMultiple',
+                       'raceAsian',
+                       'raceBlack',
+                       'sexFemale',
+                       'ageDecades',
+                       '(Intercept)'))
+```
+
+```{r}
+# Recode p value as significant, trend, n.s.
+betas$p_cat <- 
+     cut(betas$p,
+         breaks = c(0, 0.05, 0.10, 1),
+         labels = c('Significant',
+                    'Trend',
+                    'Not significant')) 
+```
+
+```{r}
+# Plots in style of Yap et al
+p.betas <- 
+     betas |> 
+     filter(covar != "(Intercept)") |> # Exclude intercept
+     # Exclude Unknown covariate categories (missing data)
+     filter(!grepl(pattern = 'Unknown', covar)) |> 
+     ggplot(aes(x = covar, y = Estimate, color = p_cat)) +
+     geom_hline(yintercept = 0,
+                linetype = 'dotted',
+                color = '#E15759') +
+     geom_point(size = 2) +
+     geom_linerange(aes(ymin = CI2.5, 
+                       ymax = CI97.5,
+                       color = p_cat),
+                    size = 1) +
+     scale_color_manual(values = c('#e03531',
+                                   '#f0bd27',
+                                   'gray40')) +
+     labs(x = 'Covariate', y = 'Regression coefficient') +
+     coord_flip() +
+     theme(legend.position = 'none')
+
+p.betas
+```
+
+### Visualize raw relationships
+
+#### Age
+
+```{r fig.width = 2.5, fig.height = 3}
+p.age <- 
+     ggplot(alpha.subset, aes(x = age_decades*10,
+                         y = value)) +
+     geom_point(alpha = 0.2) +
+     geom_smooth(method = 'lm',
+                 color = '#e03531') +
+     scale_x_continuous(breaks = seq(10, 18, by = 2)) +
+     labs(title = 'Age (years)', y = 'pMR') + 
+     ylim(0, 35) +
+     theme(axis.title.x =  element_blank())
+
+p.age
+```
+
+#### Income categories
+
+```{r}
+# Clean up household income labels for plotting
+levels(alpha.subset$ses)
+```
+
+```{r}
+alpha.subset$ses <- 
+     factor(alpha.subset$ses,
+            labels = c('<$25K',
+                       '$25-$49K',
+                       '$50-$74K',
+                       '$75K-$99K',
+                       '>$100K',
+                       'Unknown'))
+```
+
+```{r fig.height=3.5, fig.width=2.5}
+# As dotplot
+p.income <- 
+     alpha.subset |> 
+     filter(ses != 'Unknown') |> # Remove Unknown category
+     ggplot(aes(x = ses, y = value)) +
+     geom_dotplot(binaxis = 'y',
+                  binwidth = 1,
+                  stackdir = 'center',
+                  stackratio = 0.75,
+                  alpha = 0.2) +
+     stat_summary(fun= median,
+                  geom = 'crossbar',
+                  width = 0.25,
+                  color = '#e03531') +
+     stat_summary(fun= median,
+                  fun.min = function(x){median(x) - mad(x)},
+                  fun.max = function(x){median(x) + mad(x)},
+                  geom = 'errorbar',
+                  width = 0.1,
+                  color = '#e03531') +
+     ylim(0, 35) +
+     labs(title = 'Income', y = 'pMR')  +
+     theme(axis.text.x = element_text(angle = 30, hjust = 1),
+           axis.title = element_blank()) 
+
+p.income
+```
+
+#### Case status
+
+```{r}
+alpha.subset$casecontrol <- 
+     factor(alpha.subset$casecontrol,
+            labels = c('Healthy\n(control)',
+                       'Obesity\n(case)'))
+```
+
+```{r fig.height=4, fig.width=3}
+p.case <- 
+     alpha.subset |> 
+     ggplot(aes(x = casecontrol, y = value)) +
+     geom_dotplot(binaxis = 'y',
+                  binwidth = 1,
+                  stackdir = 'center',
+                  stackratio = 0.75,
+                  alpha = 0.2) +
+     stat_summary(fun= median,
+                  geom = 'crossbar',
+                  width = 0.25,
+                  color = '#e03531') +
+     stat_summary(fun= median,
+                  fun.min = function(x){median(x) - mad(x)},
+                  fun.max = function(x){median(x) + mad(x)},
+                  geom = 'errorbar',
+                  width = 0.1,
+                  color = '#e03531') +
+     ylim(0, 35) +
+     labs(title = 'Weight status', y = 'pMR') +
+     theme(axis.title = element_blank())
+
+p.case
+```
+
+#### Food insecurity
+
+```{r fig.height=3, fig.width=2.5}
+p.insec <- 
+     alpha.subset |> 
+     filter(actual_ever != 'Unknown') |> 
+     ggplot(aes(x = actual_ever, y = value)) +
+     geom_dotplot(binaxis = 'y',
+                  binwidth = 1,
+                  stackdir = 'center',
+                  stackratio = 0.75,
+                  alpha = 0.2) +
+     stat_summary(fun= median,
+                  geom = 'crossbar',
+                  width = 0.25,
+                  color = '#e03531') +
+     stat_summary(fun= median,
+                  fun.min = function(x){median(x) - mad(x)},
+                  fun.max = function(x){median(x) + mad(x)},
+                  geom = 'errorbar',
+                  width = 0.1,
+                  color = '#e03531') +
+     ylim(0, 35) +
+     labs(title = 'Food insecurity', y = 'pMR') +
+     theme(axis.title = element_blank())
+
+p.insec
+```
+
+Now, combine all of the above with patchwork:
+
+```{r fig.height=5, fig.width=7.5}
+(( p.pmr.hist ) | (p.betas)) /
+(p.age | p.income | p.case | p.insec)
+```
+
+```{r}
+# ggsave('Fig 3.pdf', device = cairo_pdf, height = 5, width = 7.5)
+```
