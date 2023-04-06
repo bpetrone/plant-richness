@@ -1,0 +1,204 @@
+---
+title: "Figure S2, S10"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_float: yes
+---
+
+# Setup
+
+```{r libraries, include=FALSE, echo=FALSE}
+library(patchwork)
+library(phyloseq)
+library(scales) # For label = comma
+library(tidyverse)
+library(vegan)
+```
+
+```{r include = FALSE, echo = FALSE}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold'),
+                    legend.title = element_text(size = 12,
+                                                face = 'bold'),
+                    legend.text = element_text(size = 11))
+)
+```
+
+# Read in data
+
+```{r}
+# trnL phyloseq
+ps <- readRDS('data/phyloseq_trnL.rds')
+
+alpha <- read_csv('data/alpha.csv')
+
+# Adult-1 and Adult-2 diet survey data
+ffq <- read_csv('data/Adult-1 and Adult-2 dietary indices.csv')
+```
+# Pre-process
+
+```{r}
+# Pull sample data
+samdf <- 
+     ps@sam_data |> 
+     data.frame() |> 
+     rownames_to_column(var = 'row')
+```
+
+# Analysis
+
+## Figure S2
+```{r fig.height=3, fig.width=6}
+samdf |> 
+     select(study, row, starts_with('reads')) |> 
+     mutate(pct_no_id = 1 - (reads_trnL/reads_tot)) |> 
+     ggplot(aes(x = reads_tot, y = reads_trnL)) +
+     geom_abline(slope = 1, 
+                 intercept = 0, 
+                 color = '#e15759',
+                 linetype = 'dashed') +
+     geom_point(alpha = 0.5) +
+     coord_equal()+
+     scale_x_log10(label = comma) + scale_y_log10(label = comma) +
+     facet_wrap(~study, nrow = 1) +
+     labs(y = 'Assigned reads', x = 'Total reads') +
+     theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+```{r}
+# ggsave('Fig S2.pdf', device = cairo_pdf, height = 3, width = 6)
+```
+
+## Figure S10 
+
+```{r}
+# Filter sample data to Adult-1 and Adult-2 only
+samdf <- filter(samdf, study %in% c('Adult-1', 'Adult-2'))
+alpha <- filter(alpha, measure == 'Richness' & rarefied == 'Raw')
+
+# join together
+samdf <- left_join(samdf, alpha, by = c('row' = 'name'))
+```
+
+### A
+
+```{r fig.height=3, fig.width=2.5}
+# Difference in sequencing depth
+ggplot(samdf, aes(x = study, y = reads_trnL)) +
+     geom_boxplot(width = 0.5) +
+     labs(x = 'Cohort', y = 'Sequencing depth') +
+     scale_y_continuous(label = comma,
+                        limits = c(0, 175000)) 
+```
+
+```{r}
+# ggsave('Fig S10a.pdf', height = 3, width = 2.5)
+```
+
+```{r}
+wilcox.test(reads_trnL ~ study,
+            data = samdf,
+            conf.int = TRUE)
+```
+### B
+
+```{r fig.height=3, fig.width=6}
+ggplot(samdf, aes(x = reads_trnL, y = value)) +
+     geom_point(alpha = 0.2) +
+     facet_wrap(~study) +
+     labs(x = 'Sequencing depth', y = 'pMR') +
+     scale_x_continuous(label = comma) +
+     scale_x_log10() +
+     scale_y_log10() +
+     theme(axis.text.x = element_text(angle = 20, hjust = 1))
+```
+
+```{r}
+ggsave('Fig S10b.pdf', height = 3, width = 6, device = cairo_pdf)
+```
+
+### C
+
+```{r}
+ffq <- 
+     samdf |> 
+     select(study, subj, reads_tot) |> 
+     right_join(ffq) |> 
+     mutate(over_1k = ifelse(reads_tot >= 1000,
+                             yes = 'Over\n1,000\nreads',
+                             no = 'Under\n1,000\nreads'),
+            over_1k = factor(over_1k,
+                             levels = c('Under\n1,000\nreads',
+                                        'Over\n1,000\nreads')))
+```
+
+```{r}
+p.fvs <- 
+     ggplot(ffq, aes(x = over_1k, y = fvs_plant_residual)) +
+     geom_boxplot() +
+     labs(y = 'FVS score residuals\n(plant items)') +
+     ylim(-13, 33) +
+     theme(axis.title.x = element_blank())
+```
+
+```{r}
+p.pdi <- 
+     ggplot(ffq, aes(x = over_1k, y = PDI)) +
+     geom_boxplot() +
+     labs(y = '\nPDI') +
+     ylim(40, 80) +
+     theme(axis.title.x = element_blank())
+```
+
+```{r}
+p.hei <- 
+     ggplot(ffq, aes(x = over_1k, y = hei_plant_all)) +
+     geom_boxplot() +
+     labs(y = 'HEI-2015\n(plant component)') +
+     ylim(7, 35) +
+     theme(axis.title.x = element_blank())
+```
+
+```{r fig.height=4, fig.width=7.5}
+( p.fvs | p.pdi | p.hei ) 
+```
+
+```{r}
+ggsave('Fig S10c.pdf', height=4, width=7.5)
+```
+
+```{r}
+wilcox.test(hei_plant_all ~ over_1k, ffq,
+            conf.int = TRUE)
+```
+
+```{r}
+wilcox.test(hei_non_plant ~ over_1k, ffq,
+       conf.int = TRUE)
+```
+
+```{r}
+wilcox.test(PDI ~ over_1k, ffq,
+            conf.int = TRUE)
+```
+```{r}
+wilcox.test(uPDI ~ over_1k, ffq,
+            conf.int = TRUE)
+```
+
+```{r}
+wilcox.test(fvs_plant_residual ~ over_1k, ffq,
+            conf.int = TRUE)
+```
+
+```{r}
+wilcox.test(fvs_animal_residual ~ over_1k, ffq,
+            conf.int = TRUE)
+```

@@ -1,0 +1,333 @@
+---
+title: "Figure S4"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+---
+
+```{r include=FALSE, echo=FALSE}
+library(phyloseq)
+library(readxl)
+library(tidyverse)
+```
+
+```{r include=FALSE, echo=FALSE}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    legend.title = element_text(size = 12,
+                                                face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
+# Read in data
+
+```{r}
+# trnL phyloseq
+ps.mb <- readRDS('data/phyloseq_trnL.rds')
+
+# Weight Loss menu phyloseq
+ps.menu <- readRDS('data/phyloseq_WeightLoss_menu.rds')
+
+# Mapping file to match taxon names between trnL, menu
+name.sync <- read_excel('data/trnL to menu taxon mapping.xlsx')
+```
+
+# Pre-process
+
+```{r}
+# Subset to trnL to Weight Loss cohort only
+ps.mb <-
+     ps.mb |> 
+     subset_samples(study == 'Weight Loss') %>%
+     prune_taxa(taxa_sums(.) > 0, .) %>%
+     prune_samples(sample_sums(.) > 0, .)
+```
+
+```{r}
+# Rename metabarcoding data to be consistent with menu
+sample_names(ps.mb) <- 
+     paste(sample_data(ps.mb)$subj,
+           sample_data(ps.mb)$date,
+           sep = '_')
+
+head(sample_names(ps.menu))
+head(sample_names(ps.mb))
+```
+
+```{r}
+# Remove non-plant entries from menu
+ps.menu <- subset_taxa(ps.menu,
+                       kingdom == 'Viridiplantae')
+```
+```{r}
+# 1-2 day lag from sample dates
+sample_data(ps.mb)$delta1 <- 
+     paste(sample_data(ps.mb)$subj,
+           sample_data(ps.mb)$date - 1,
+           sep = '_')
+sample_data(ps.mb)$delta2 <- 
+     paste(sample_data(ps.mb)$subj,
+           sample_data(ps.mb)$date - 2,
+           sep = '_')
+```
+
+```{r}
+samdf.mb <- 
+     ps.mb |> 
+     sample_data() |> 
+     data.frame() |> 
+     rownames_to_column(var = 'row')
+```
+
+```{r}
+# Merge together menu data from 1-2 days prior to sample.  Note: Can't use phyloseq's merge_samples here because some samples make up >1 merge
+
+# Do manually on ASV table
+asvtab.menu <- otu_table(ps.menu)@.Data
+asvtab.menu.12 <- data.frame()
+
+for (sample in seq(dim(samdf.mb)[1])){
+     # Pull menu day -1
+     one.before <- asvtab.menu[samdf.mb$delta1[sample], ]
+     # Pull menu day -2
+     two.before <- asvtab.menu[samdf.mb$delta2[sample], ]
+     # Merge and place in new, aggregated OTU table
+     asvtab.menu.12 <- rbind(asvtab.menu.12,
+                             one.before + two.before)
+     # Update food names (only has to be done once)
+     if (sample == 1){
+          names(asvtab.menu.12) <- names(one.before + two.before)}
+     # Update sample name
+     row.names(asvtab.menu.12)[sample] <- samdf.mb$row[sample]
+}
+
+# Now rebuild a subsetted phyloseq object
+ps.menu.12 <- phyloseq(otu_table(asvtab.menu.12, taxa_are_rows = FALSE),
+                       sample_data(ps.mb), # Now this matches
+                       tax_table(ps.menu)) # Menu-specific taxonomy
+
+# Remove any taxa that aren't present any longer
+ps.menu.12 <- prune_taxa(taxa_sums(ps.menu.12) > 0, ps.menu.12)
+ps.menu.12
+```
+
+```{r}
+# For each sample, group by taxon, calculate intake
+menu.portion <- 
+     psmelt(ps.menu.12) |> 
+     left_join(name.sync, by = c('OTU' = 'menu_taxa')) |> 
+     # This join means some taxa are now duplicated, need to sum them below
+     # e.g. {carrot, parsnip, parsley, ...} all become "Apiaceae"
+     rename(taxon_name = mb_taxa) |> 
+     filter(!is.na(taxon_name)) |> 
+     group_by(subj, date, taxon_name) |> 
+     summarize(abund_meas = sum(Abundance)) 
+```
+
+```{r}
+# Now assign tertile
+menu.tertile <- 
+     menu.portion |> 
+     group_by(taxon_name) |> 
+     summarize(tertile_0 = quantile(abund_meas, 
+                                    probs = seq(0, 1, by = 1/3))[1],
+               tertile_1 = quantile(abund_meas, 
+                                    probs = seq(0, 1, by = 1/3))[2],
+               tertile_2 = quantile(abund_meas, 
+                                    probs = seq(0, 1, by = 1/3))[3],
+               tertile_3 = quantile(abund_meas, 
+                                    probs = seq(0, 1, by = 1/3))[4])
+
+menu.portion <- 
+     menu.portion |> 
+     left_join(menu.tertile) |> 
+     mutate(tertile = case_when(abund_meas <= tertile_1 ~ 1,
+                                abund_meas <= tertile_2 ~ 2,
+                                abund_meas <= tertile_3 ~ 3))
+```
+
+
+# Portion size analysis
+
+```{r}
+# CLR transform abudnance data
+dna.portion <- 
+     ps.mb |> 
+     microbiome::transform(transform = 'clr') |> 
+     psmelt() |> 
+     select(subj, date, taxon_name = name, abund_dna_clr = Abundance)
+```
+
+```{r}
+# Join to menu portions
+portions.df <- 
+     full_join(dna.portion,
+               menu.portion) |> 
+     filter(!is.na(abund_dna_clr) & !is.na(abund_meas)) |> 
+     # Rename with common name
+     left_join(select(name.sync, mb_taxa, common_name),
+               by = c('taxon_name'='mb_taxa'),
+               multiple = 'all') |> 
+     distinct()
+```
+
+### By food
+
+```{r}
+# Do stats: compare 1st and 3rd tertiles for difference in CLR-transformed trnL
+food.stats <- 
+     portions.df |> 
+     filter(tertile != 2) |> 
+     group_by(common_name) |> 
+     # Need to consider only those taxa that have data for both 1st & 3rd
+     filter(n_distinct(tertile) == 2) |> 
+     summarize(wilcox.p = wilcox.test(abund_dna_clr ~ tertile,
+                                      alternative = 'less',
+                                      exact = FALSE)$p.value) |> 
+     mutate(wilcox.p.adj = p.adjust(wilcox.p, method = 'BH')) |> 
+     arrange(wilcox.p.adj)
+
+food.stats
+```
+```{r}
+# Use this ranking to re-level the plot dataframe
+portions.df <- 
+     portions.df |> 
+     filter(tertile != 2) |>
+     mutate(tertile = factor(tertile, levels = c(1, 3)),
+            common_name = factor(common_name,
+                                levels =
+                    c(food.stats$common_name[food.stats$wilcox.p.adj<0.1],
+                      sort(
+                           food.stats$common_name[food.stats$wilcox.p.adj>=0.1]
+                      )
+                    )
+            )
+     )
+```
+
+```{r}
+# Calculate median relative abundance and color by significance
+foods.median <-
+     portions.df |> 
+     group_by(common_name, tertile) |> 
+     summarize(abund_dna_clr = median(abund_dna_clr)) |> 
+     left_join(select(food.stats, common_name, wilcox.p.adj)) |> 
+     mutate(signif = case_when(wilcox.p.adj < 0.05 ~ 'signif',
+                               wilcox.p.adj < 0.1 ~ 'trend',
+                               TRUE ~ ''),
+            signif = factor(signif, 
+                            levels = c('signif',
+                                       'trend', 
+                                       '')),
+            common_name = factor(common_name,
+                                 levels = food.stats$common_name)) 
+```
+
+```{r fig.height=10, fig.width=9}
+ggplot(portions.df, aes(x = tertile, y = abund_dna_clr)) +
+     geom_hline(yintercept = 0,
+                linetype = 'dashed') +
+     geom_crossbar(data = foods.median,
+                   aes(ymin = abund_dna_clr,
+                       ymax = abund_dna_clr,
+                       color = signif),
+                   fatten = 1.5) +
+     geom_jitter(alpha = 0.3,
+                width = 0.1) +
+     facet_wrap(~common_name,
+                scales = 'free_y',
+                ncol = 7) +
+     scale_color_manual(values = c('#e03531',
+                                   '#f0bd27',
+                                   'black')) +
+     scale_y_continuous(labels = scales::number_format(accuracy = 1)) +
+     labs(x = 'Recorded intake<br>(tertile)', 
+          y = 'Measured intake<br>(transformed *trnL* read count)') +
+     theme(strip.text.x = element_text(size = 10),
+           axis.title.x = ggtext::element_markdown(),
+           axis.title.y = ggtext::element_markdown(),
+           legend.position = 'none',
+           panel.grid.minor.y = element_blank())
+```
+
+```{r}
+# ggsave('Fig S4c.pdf', device = cairo_pdf, height = 10, width = 9)
+```
+
+### Overall dataset
+
+#### Categorical
+
+```{r}
+medians.df <-
+     portions.df |> 
+     group_by(tertile) |> 
+     summarize(med = median(abund_dna_clr))
+```
+
+```{r fig.height=4, fig.width=3}
+# Using tertiles
+ggplot(portions.df, aes(x = tertile, 
+                        group = tertile)) +
+     geom_boxplot(aes(y = abund_dna_clr),
+                  outlier.alpha = 0,
+                  width = 0.6) +
+     geom_jitter(aes(y = abund_dna_clr),
+                 alpha = 0.1,
+                 width = 0.2,
+                 size = 2) +
+     ylim(-3, 13) +
+     labs(x = 'Recorded intake<br>(tertile)', 
+          y = 'Measured intake<br>(transformed *trnL* read count)') +
+     theme(axis.title.x = ggtext::element_markdown(),
+           axis.title.y = ggtext::element_markdown())
+```
+
+```{r}
+# ggsave('Fig S4b.pdf', device = cairo_pdf, height = 4, width = 3)
+```
+
+```{r}
+portions.df |>
+     filter(tertile != 2) %>%
+     wilcox.test(abund_dna_clr ~ tertile,
+                 data = .,
+                 conf.int = TRUE,
+                 alternative = 'less') 
+```
+#### Continuous
+
+```{r fig.height=4, fig.width=4.3}
+# Using continuous portion size
+ggplot(portions.df, aes(x = abund_meas, y = abund_dna_clr)) +
+     geom_point(alpha = 0.2,
+                size = 2) +
+     scale_x_log10() +
+     labs(x = 'Recorded intake<br>(grams)',
+          y = 'Measured intake<br>(transformed *trnL* read count)') +
+     theme(axis.title.y = ggtext::element_markdown(),
+           axis.title.x = ggtext::element_markdown(),
+           plot.margin = unit(c(0.1, 1, 0.1, 0.1), units = 'cm'))
+```
+
+```{r}
+# ggsave('Fig S4a.pdf', device = cairo_pdf, height = 4, width = 4.3)
+```
+
+```{r}
+cor.test(~ abund_dna_clr + abund_meas,
+         data = portions.df,
+         method = 'spearman',
+         exact = FALSE)
+```
+

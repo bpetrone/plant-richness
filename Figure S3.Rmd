@@ -1,0 +1,577 @@
+---
+title: "Figure S3"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+---
+
+```{r include=FALSE, echo=FALSE}
+library(eulerr)
+library(phyloseq)
+library(readxl)
+library(tidyverse)
+```
+
+```{r include=FALSE, echo=FALSE}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    legend.title = element_text(size = 12,
+                                                face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
+# Read in data
+
+```{r}
+# trnL phyloseq
+ps.mb <- readRDS('data/phyloseq_trnL.rds')
+
+# Weight Loss menu phyloseq
+ps.menu <- readRDS('data/phyloseq_WeightLoss_menu.rds')
+
+# Mapping file to match taxon names between trnL, menu
+name.sync <- read_excel('data/trnL to menu taxon mapping.xlsx')
+
+# Controlled Feeding per-food performance
+performance.cf <- read_csv('data/Controlled Feeding per-food performance.csv')
+```
+# Pre-process
+
+```{r}
+# Subset to trnL to Weight Loss cohort only
+ps.mb <-
+     ps.mb |> 
+     subset_samples(study == 'Weight Loss') %>%
+     prune_taxa(taxa_sums(.) > 0, .) %>%
+     prune_samples(sample_sums(.) > 0, .)
+```
+
+```{r}
+# Rename metabarcoding data to be consistent with menu
+sample_names(ps.mb) <- 
+     paste(sample_data(ps.mb)$subj,
+           sample_data(ps.mb)$date,
+           sep = '_')
+
+head(sample_names(ps.menu))
+head(sample_names(ps.mb))
+```
+```{r}
+# Remove non-plant entries from menu
+ps.menu <- subset_taxa(ps.menu,
+                       kingdom == 'Viridiplantae')
+ps.menu
+```
+```{r}
+# Make a variable for 1-2 day lag menu from sample dates
+sample_data(ps.mb)$delta1 <- 
+     paste(sample_data(ps.mb)$subj,
+           sample_data(ps.mb)$date - 1,
+           sep = '_')
+sample_data(ps.mb)$delta2 <- 
+     paste(sample_data(ps.mb)$subj,
+           sample_data(ps.mb)$date - 2,
+           sep = '_')
+```
+
+```{r}
+samdf.mb <- 
+     ps.mb |> 
+     sample_data() |> 
+     data.frame() |> 
+     rownames_to_column(var = 'row')
+```
+
+```{r}
+# Merge 1-2 menu days prior and match to samples
+# Note: Can't use phyloseq's merge_samples here because some samples make up >1 merge
+
+# Do manually on ASV table
+asvtab.menu <- otu_table(ps.menu)@.Data
+asvtab.menu.12 <- data.frame()
+
+for (sample in seq(dim(samdf.mb)[1])){
+     # Pull menu day -1
+     one.before <- asvtab.menu[samdf.mb$delta1[sample], ]
+     # Pull menu day -2
+     two.before <- asvtab.menu[samdf.mb$delta2[sample], ]
+     # Merge and place in new, aggregated OTU table
+     asvtab.menu.12 <- rbind(asvtab.menu.12,
+                             one.before + two.before)
+     # Update food names (only has to be done once)
+     if (sample == 1){
+          names(asvtab.menu.12) <- names(one.before + two.before)}
+     # Update sample name
+     row.names(asvtab.menu.12)[sample] <- samdf.mb$row[sample]
+}
+
+# Now rebuild a subsetted phyloseq object
+ps.menu.12 <- phyloseq(otu_table(asvtab.menu.12, taxa_are_rows = FALSE),
+                       sample_data(ps.mb), # Now this matches
+                       tax_table(ps.menu)) # Menu-specific taxonomy
+
+# Remove any taxa that aren't present any longer
+ps.menu.12 <- prune_taxa(taxa_sums(ps.menu.12) > 0, ps.menu.12)
+ps.menu.12
+```
+```{r}
+# Helper function for getting lowest named taxonomic level
+lowest_level <- function(taxtab){
+     # Update taxa names from ASV sequence to identified taxon at the most
+     # precise phylogenetic level possible
+
+     # This gets the right-most, non-NA value
+     lowest.index <- max.col(!is.na(taxtab), 'last')
+     taxtab$name <- taxtab[cbind(seq_along(lowest.index),
+                                         lowest.index)]
+
+     taxtab
+}
+```
+
+```{r}
+# Match taxa names between the two datasets
+taxtab.mb <- 
+     ps.mb@tax_table@.Data |> 
+     data.frame() |> 
+     lowest_level()
+
+# Rename with lowest-level name
+taxa_names(ps.mb) <- tax_table(ps.mb)@.Data[, 'name']
+
+# Link that to common name
+tax_table(ps.mb) <- 
+     name.sync |> 
+     select(mb_taxa, common_name) |> 
+     right_join(data.frame(ps.mb@tax_table@.Data),
+               by = c('mb_taxa' = 'name')) |>
+     distinct() |> 
+     column_to_rownames(var = 'mb_taxa') |> 
+     as.matrix()
+
+# Rename with linked common name
+taxa_names(ps.mb) <- tax_table(ps.mb)@.Data[, 'common_name']
+```
+
+```{r}
+# Synchronize menu to metabarcoding names
+# Add name column
+tax_table(ps.menu.12) <- 
+     lowest_level(data.frame(ps.menu.12@tax_table@.Data)) |> 
+     as.matrix()
+
+taxa_names(ps.menu.12) <- tax_table(ps.menu.12)@.Data[, 'name']
+
+# Link that to common name
+tax_table(ps.menu.12) <- 
+     name.sync |> 
+     select(menu_taxa, common_name) |> 
+     left_join(x = data.frame(ps.menu.12@tax_table@.Data),
+               by = c('name' = 'menu_taxa')) |> 
+     select(common_name, everything()) |> 
+     distinct() |> 
+     column_to_rownames(var = 'name') |> 
+     as.matrix()
+
+# Renaming more complicated, see below
+```
+
+Some menu items now have the same label and should be merged. A straightforward merge on common name labels doesn't work using `tax_glom` because they differ at a higher rank.  Iterate over the tips instead, merging one at a time:
+
+```{r}
+# Get a list of these duplicates
+dups <- 
+     ps.menu.12@tax_table@.Data |> 
+     data.frame() |> 
+     filter(duplicated(common_name)) |> 
+     pull(common_name) |> 
+     unique()
+
+dups
+```
+```{r}
+ps.menu.12
+merges = list()
+for (taxon in dups){
+     # Get the list of equivalent taxa at the species level for that food
+     eq_taxa <- 
+          ps.menu.12@tax_table@.Data |> 
+          data.frame() |> 
+          filter(common_name == taxon) |> 
+          select(-common_name) |> 
+          MButils::lowest_level() |> 
+          pull(name)
+     
+     merges <- append(merges, list(eq_taxa))
+}
+
+if (length(merges) == 1){
+     # Just do one merge
+      ps.menu.id <- merge_taxa(ps.menu.12, merges[[1]])
+} else {
+     # Merge once to make new phyloseq
+     ps.menu.id <- merge_taxa(ps.menu.12, merges[[1]])
+     # Then loop over remainder
+     for (i in 2:length(merges)){
+          ps.menu.id <- merge_taxa(ps.menu.id, merges[[i]])
+     }
+}
+
+taxa_names(ps.menu.id) <- tax_table(ps.menu.id)[, 'common_name']
+ps.menu.id
+```
+# Analysis
+
+## A
+
+```{r}
+# Plants
+# Get union of taxa detected in the two analyses
+mb.taxa <- taxa_names(ps.mb)
+menu.taxa <- taxa_names(ps.menu.id)
+
+all.plants <- 
+     union(mb.taxa,
+           menu.taxa) 
+
+length(all.plants)
+```
+
+```{r}
+# Make dataframe for plot input
+# Plants
+plant.df <- 
+     data.frame(taxon = all.plants) |> 
+     mutate(dna = taxon %in% mb.taxa,
+            menu = taxon %in% menu.taxa)
+```
+
+```{r fig.height=3, fig.width=3}
+# Version with labels for reference
+euler(plant.df[,c('dna', 'menu')]) |> 
+     plot(
+          fills = c('#849db1', 'white'),
+          labels = TRUE,
+          shape = "ellipse", 
+          quantities = TRUE
+     )
+```
+
+## B
+
+```{r}
+# Extract OTU tables
+asvtab.mb <- otu_table(ps.mb)@.Data
+asvtab.menu.12 <- otu_table(ps.menu.id)@.Data
+
+# Synchronize names
+dim(asvtab.mb)
+dim(asvtab.menu.12)
+length(union(colnames(asvtab.menu.12), colnames(asvtab.mb)))
+```
+
+Want to make these tables the same same size (taking the union of their columns, and populating the new additions to each with zeros since the food wasn't detected in that dataset).
+```{r}
+# Helper function to pad out columns
+pad_columns <- function(x, y, fill = 0){
+     # Takes two matrices and synchronizes columns across them, filling added 
+     # cols with a set value
+     # Returns a list of the two updated matrices
+     
+     # Find missing columns in both matrices
+     missing.x <- setdiff(colnames(y), colnames(x))
+     missing.y <- setdiff(colnames(x), colnames(y))
+     
+     # Pad out columns of x
+     fill.x <- matrix(fill, 
+                      nrow = dim(x)[1],
+                      ncol = length(missing.x))
+     colnames(fill.x) <- missing.x 
+     x <- cbind(x, fill.x)
+     
+     # Pad out columns of y
+     fill.y <- matrix(fill, 
+                      nrow = dim(y)[1],
+                      ncol = length(missing.y))
+     colnames(fill.y) <- missing.y
+     y <- cbind(y, fill.y)
+     
+     # Arrange the columns so they appear in identical order
+     u <- sort(union(colnames(x), colnames(y)))
+     x <- x[, u]
+     y <- y[, u]
+     
+     list(x, y)
+}
+```
+
+```{r}
+padded <- pad_columns(asvtab.mb, asvtab.menu.12)
+asvtab.mb <- padded[[1]]
+asvtab.menu.12 <- padded[[2]]
+
+rm(padded)
+```
+
+```{r}
+# Confirm row and column names are equal before proceeding
+all(row.names(asvtab.mb) == row.names(asvtab.menu.12))
+all(colnames(asvtab.mb) == colnames(asvtab.menu.12))
+```
+
+```{r}
+# Label predictions 
+mb.pos <- asvtab.mb > 0
+menu.pos <- asvtab.menu.12 > 0
+
+tp <- mb.pos & menu.pos
+tn <- !mb.pos & !menu.pos
+fp <- mb.pos & !menu.pos
+fn <- !mb.pos & menu.pos
+```
+
+```{r}
+# Summarize predictions
+pred <- bind_rows(colSums(tp), 
+                  colSums(tn), 
+                  colSums(fp), 
+                  colSums(fn))
+
+pred$prediction <- c('tp', 'tn', 'fp', 'fn')
+```
+
+```{r}
+# Reformat to long for visualization
+pred.long <- pivot_longer(pred,
+                          cols = -prediction,
+                          names_to = 'common_name',
+                          values_to = 'count')
+
+# Factor data for visualization
+# Calculate F-measure to be used downstream
+# For this ranking, combine results from both cohorts
+pred.summary <- 
+     pred.long |> 
+     group_by(prediction, common_name) |> 
+     pivot_wider(names_from = prediction, values_from = count) |> 
+     mutate(recall = tp/(tp + fn),
+            precision = tp/(tp + fp),
+            accuracy = (tp + tn)/(tp + tn + fp + fn),
+            f_measure = (2 * recall * precision)/(recall + precision)) |> 
+     arrange(desc(f_measure), fn, fp)
+
+pred.summary
+```
+
+```{r}
+# Now that joins complete, add factor levels
+pred.long <- 
+     pred.long |> 
+     mutate(
+          common_name = factor(common_name, 
+                               levels = pred.summary$common_name),
+          prediction = factor(prediction, levels = c('tp',
+                                                     'tn',
+                                                     'fp',
+                                                     'fn'),
+                              labels = c('True positive',
+                                         'True negative',
+                                         'False positive',
+                                         'False negative')))
+```
+
+```{r}
+# Add facets to go across multiple panels
+pred.long <- 
+     pred.long |> 
+     arrange(common_name) |> 
+     mutate(facet = sort(rep(1:4, 96))) # Tall: 4 rows
+```
+
+```{r fig.height=12, fig.width=6}
+pred.long |>
+     ggplot(aes(x = common_name, y = count, fill = prediction)) +
+     geom_bar(position = 'stack', stat = 'identity') +
+     scale_fill_manual(values = c('#309343', # TP
+                                  '#8AC373', # TN
+                                  '#D7191C', # FP
+                                  '#FDAE61')) + # FN
+     facet_wrap(~facet,
+                nrow = 4,
+                scales = 'free_x') +
+     theme_classic() +
+     scale_y_continuous(breaks = c(0, 10, 20, 30, 40)) +
+     theme(axis.text.x = ggtext::element_markdown(angle = 45, 
+                                                  hjust = 1,
+                                                  size = 12,
+                                                  face = 'bold'),
+           axis.text.y = element_text(size = 12,
+                                      face = 'bold'),
+           axis.ticks.x = element_blank(),
+           axis.line.x = element_blank(),
+           axis.title = element_blank(),
+           legend.position = 'none',
+           legend.title = element_blank(), 
+           plot.margin = margin(0, 0, 0, 0.75, 'in'),
+           strip.background = element_blank(),
+           strip.text = element_blank()) 
+```
+```{r}
+# ggsave('Fig S3b.pdf'), height = 18, width = 9)
+```
+
+## C
+
+Compare to performance in Controlled Feeding cohort
+```{r}
+pred.summary.wl <- pred.summary
+pred.summary.cf <- performance.cf
+```
+
+```{r}
+# Need to sync common name labels between these
+# Happen due to slight differences in detected taxa or manual naming in each cohort
+
+# Updates to Weight Loss
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'grains'] <- 
+     'wheat'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'scallion, chive, leek'] <-
+     'scallion'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'citrus family'] <- 
+     'citrus'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'oats'] <- 
+     'oat'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'potato, tomatillo'] <- 
+     'potato'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'peas'] <- 
+     'pea'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'apple, pear'] <- 
+     'apple'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'chard, beet'] <- 
+     'sugar beet'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'laurel family'] <- 
+     'cinnamon'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'mustard family'] <- 
+     'mustards, rapeseed'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'onion, shallot'] <- 
+     'onion'
+pred.summary.wl$common_name[pred.summary.wl$common_name == 'stone fruits'] <- 
+     'peach'
+
+# Change ABC
+pred.summary.cf$common_name[pred.summary.cf$common_name == 'herbs'] <- 
+     'oregano, thyme'
+
+pred.summary.cf$common_name[pred.summary.cf$common_name == 'herbs'] <- 
+     'oregano, thyme'
+```
+
+```{r}
+pred.summary.cf$study <- 'Controlled Feeding'
+pred.summary.wl$study <- 'Weight Loss'
+```
+
+```{r}
+# Simplify: all other metrics can be recalculated from TP, TN, FP, FN
+pred.summary.cf <- 
+     pred.summary.cf |> 
+     select(study, common_name, tp:fn)
+
+pred.summary.wl <- 
+     pred.summary.wl |> 
+     select(study, common_name, tp:fn)
+```
+
+```{r}
+# Join together
+pred.summary <- 
+     bind_rows(
+          pred.summary.cf,
+          pred.summary.wl
+          )
+
+rm(pred.summary.wl, pred.summary.cf)
+```
+
+```{r}
+# Catch naming differences and correct:
+pred.summary |> 
+     group_by(common_name) |> 
+     filter(length(common_name) == 1)
+```
+Screened these and added above. 
+
+```{r}
+# Filter to only taxa within the two
+n_distinct(pred.summary$common_name)
+pred.summary <- 
+     pred.summary |> 
+     group_by(common_name) |> 
+     filter(length(common_name) == 2) |> 
+     ungroup()
+
+n_distinct(pred.summary$common_name)
+```
+
+```{r}
+# Calculate FPR, FNR
+pred.summary <- 
+     pred.summary %>% 
+     mutate(fnr = fn/(tp+fn),
+            fpr = fp/(tn+fp))
+```
+
+```{r}
+# Organize labels for plot
+pred.metrics <- 
+     pred.summary %>% 
+     select(-(tp:fn)) %>% 
+     pivot_longer(cols = c(fpr, fnr),
+                  names_to = 'metric',
+                  values_to = 'value') 
+
+pred.metrics
+```
+```{r fig.height=5, fig.width=3}
+pred.metrics %>% 
+     pivot_wider(names_from = 'study',
+                 values_from = 'value') %>% 
+     mutate(metric = factor(metric,
+                            levels = c('fpr', 'fnr'),
+                            labels = c('FPR', 'FNR'))) %>% 
+     ggplot(aes(x = `Weight Loss`, y = `Controlled Feeding`)) +
+     geom_point(size = 3, 
+                alpha = 0.7) +
+     scale_x_continuous(breaks = seq(0, 1, 0.25),
+                        labels = c(0, 0.25, 0.5, 0.75, 1)) +
+     scale_y_continuous(breaks = seq(0, 1, 0.25),
+                        labels = c(0, 0.25, 0.5, 0.75, 1)) +
+     facet_wrap(~metric,
+                nrow = 2)
+```
+```{r}
+# ggsave('Fig S3c.pdf', height=5, width=3, device= cairo_pdf)
+```
+
+```{r}
+pred.metrics %>% 
+     pivot_wider(names_from = 'study',
+                 values_from = 'value') %>% 
+     group_by(metric) %>% 
+     summarize(
+          rho = cor.test(~ `Controlled Feeding` + `Weight Loss`,
+                         method = 'spearman',
+                         exact = FALSE)$estimate,
+          p = cor.test(~ `Controlled Feeding` + `Weight Loss`,
+                       method = 'spearman',
+                       exact = FALSE)$p.value)
+```

@@ -1,0 +1,281 @@
+---
+title: "Figure S7"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+---
+
+```{r}
+library(patchwork)
+library(phyloseq)
+library(tidyverse)
+```
+
+```{r include=FALSE, echo=FALSE}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold'),
+                    legend.title = element_text(size = 12,
+                                                face = 'bold'),
+                    legend.text = element_text(size = 11))
+)
+```
+
+# Read in data
+```{r include=FALSE, echo=FALSE}
+# Full trnL phyloseq object
+ps <- readRDS('data/phyloseq_trnL.rds')
+
+# Alpha diversity estimates
+alpha <- read_csv('data/alpha.csv')
+```
+
+# Pre-process
+```{r}
+# Subset to Adult-1, Adult-2 samples
+ps <- subset_samples(ps, study %in% c('Adult-1', 'Adult-2'))  
+ps <- prune_samples(sample_sums(ps) > 0, ps) 
+```
+
+```{r}
+# Melt and select relevant variables
+melt <- 
+     ps |> 
+     psmelt() |> 
+     select(OTU:CH_weekday, ONR_day,
+            superkingdom:name)
+```
+
+```{r}
+# Sequence samples
+# Adult-1: 
+melt <- 
+     melt |> 
+     # Create combination week-weekday label
+     mutate(CH_day = paste(melt$CH_week, melt$CH_weekday)) |> 
+     # Recode NA
+     mutate(CH_day = ifelse(CH_day == 'NA NA',
+                            yes = NA,
+                            no = CH_day))
+
+unique(melt$CH_day) |> sort()
+```
+
+```{r}
+unique(melt$ONR_day)
+```
+
+```{r}
+# Collapse this ordering into a single variable, so it can be iterated over below
+melt <- 
+     melt |> 
+     unite('study_day', c(CH_day, ONR_day), na.rm = TRUE) |> 
+     # Simplify columns
+     select(Sample, 
+            Abundance,
+            study,
+            subj, 
+            study_day,
+            superkingdom:name)
+```
+
+```{r}
+# Make a factor to structure ordering
+melt$study_day <- factor(melt$study_day,
+                      levels = c(
+                           # Adult-1 levels
+                           '1 Wednesday', 
+                           '1 Thursday', 
+                           '1 Friday', 
+                           '2 Wednesday', 
+                           '2 Thursday', 
+                           '2 Friday', 
+                           '3 Wednesday', 
+                           '3 Thursday', 
+                           '3 Friday', 
+                           '4 Wednesday', 
+                           '4 Thursday', 
+                           '4 Friday', 
+                           '5 Wednesday', 
+                           '5 Thursday', 
+                           '5 Friday', 
+                           '6 Wednesday', 
+                           '6 Thursday', 
+                           '6 Friday',
+                           '6 Saturday',
+                           # Adult-2 levels
+                           '2', # T1
+                           '5', # F1
+                           '9', # T2
+                           '12', # F2
+                           '16', # T3
+                           '19')) # F3
+```
+
+# Analyze
+
+## Calculate food accumulation
+
+```{r}
+# Make dataframe for storing results
+results.df <- 
+     data.frame(
+          study = NULL,
+          subj = NULL,
+          sample_n = NULL,
+          detected_so_far = NULL
+     )
+```
+
+```{r}
+# Check if any study day is NA
+sum(is.na(melt$study_day))
+```
+
+```{r}
+# Iterate over each subject
+for (s in unique(melt$subj)){
+     
+     # Filter to only that subject's samples, and taxa > 0
+     melt.s <- 
+          filter(melt, subj == s & Abundance > 0)
+     
+     # Get number of samples
+     n <- n_distinct(melt.s$study_day)
+     n
+     
+     # Arrange in order
+     melt.s <- arrange(melt.s, study_day)
+
+     # Get study day of each
+     days <- unique(melt.s$study_day)
+     
+     # Initial entries
+     detected_names = NULL # No plants detected yet 
+     
+     # Add origin to data
+     row <- 
+          data.frame(study = unique(melt.s$study),
+                     subj = unique(melt.s$subj),
+                     sample_n = 0,
+                     detected_so_far = 0) 
+     
+     # Append to results
+     results.df <- bind_rows(results.df,
+                             row)
+
+     # Then, iterate over each one of that subject's samples in order, counting
+     # cumulative trnL taxa as we go
+     for (i in seq(n)){
+          current <- 
+               filter(melt.s, 
+                      study_day == days[i]) |> 
+               pull(name) |> 
+               sort()
+          
+          current <- union(detected_names, current)
+          
+          row <- 
+               data.frame(study = unique(melt.s$study),
+                          subj = unique(melt.s$subj),
+                          sample_n = i,
+                          detected_so_far = length(current)) 
+          
+          # Append to results
+          results.df <- bind_rows(results.df,
+                                  row)
+          
+          # Update taxa detected so far
+          detected_names <- current
+     }
+     
+}
+```
+
+```{r}
+# Do dimensions check out?
+# We have number of unique subj-sample pairs, plus each subject again (0 row)
+melt |> 
+     group_by(subj, study_day) |> 
+     count() |> 
+     dim()
+
+n_distinct(melt$subj)
+```
+
+```{r}
+566 + 60 # All data
+dim(results.df)
+```
+
+## Fit curves
+
+Species accumulation curves modeled with either an exponential or linear function. 
+```{r}
+# Make a numeric subject ID by cohort (1...n_1 in Adult 1, and 1...n_2 in Adult-2).
+results.df <- 
+     arrange(results.df, study, subj)
+
+results.df <- 
+     results.df |> 
+     group_by(study) |> 
+     mutate(subj_numeric = factor(subj, 
+                                  labels = 1:n_distinct(subj))) |> 
+     ungroup()
+```
+
+```{r}
+# Make overview plot of fits (Adult-1)
+p.1 <- 
+     results.df |> 
+     filter(sample_n > 0) |> # Remove intercept (for log below)
+     filter(study == 'Adult-1') |> 
+     ggplot(aes(x = sample_n, y = detected_so_far)) +
+     geom_point(size = 2, alpha = 0.6) +
+     geom_smooth(aes(color = study),
+                 method = 'lm', 
+                 formula = y ~ log(x)) +
+     facet_wrap(~ subj_numeric, 
+                nrow = 7, ncol = 4) +
+     ylim(0, 70) + xlim(0,18) +
+     labs(y = 'Cumulative pMR', 
+          x = 'Stool samples (*n*)') +
+     theme(legend.position = 'none',
+           strip.text = element_blank(),
+           axis.title.x = ggtext::element_markdown())
+```
+
+```{r}
+# Make overview plot of fits (Adult-2)
+p.2 <- 
+     results.df |> 
+     filter(sample_n > 0) |> # Remove intercept (for log below)
+     filter(study == 'Adult-2') |> 
+     ggplot(aes(x = sample_n, y = detected_so_far)) +
+     geom_point(size = 2, alpha = 0.6) +
+     geom_smooth(aes(color = study),
+                 method = 'lm', 
+                 formula = y ~ log(x)) +
+     facet_wrap(~ subj_numeric, 
+                nrow = 8, ncol = 4) +
+     ylim(0, 70) + xlim(0,18) +
+     labs(y = 'Cumulative pMR', 
+          x = 'Stool samples (*n*)') +
+     theme(legend.position = 'none',
+           axis.title.x = ggtext::element_markdown(),
+           strip.text = element_blank())
+```
+
+```{r fig.height=10, fig.width=10}
+( p.1 | p.2 )
+```
+```{r}
+# ggsave('Fig S7.pdf', device = cairo_pdf, height = 10, width = 10)
+```

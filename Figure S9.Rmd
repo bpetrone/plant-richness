@@ -1,0 +1,229 @@
+---
+title: "Figure S9"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+---
+
+```{r include=FALSE, echo=FALSE}
+library(phyloseq)
+library(tidyverse)
+library(UpSetR)
+```
+
+```{r include=FALSE, echo=FALSE}
+# Plotting themes
+theme_set(theme_bw() +
+               theme(
+                    axis.text = element_text(size = 12),
+                    axis.title = element_text(size = 14,
+                                              face = 'bold'),
+                    legend.title = element_text(size = 12,
+                                                face = 'bold'),
+                    strip.text = element_text(size = 12,
+                                              face = 'bold')
+                     )
+)
+```
+
+# Read in data
+
+```{r}
+# Full trnL phyloseq object
+ps <- readRDS('data/phyloseq_trnL.rds')
+```
+# Pre-process
+
+```{r}
+# Make an object with just Adolescent samples
+ps.adol <- subset_samples(ps, study == 'Adolescent') 
+ps.adol <- prune_samples(sample_sums(ps.adol) > 0, ps.adol)
+     
+ps.adol
+```
+# Analyze
+
+## A
+
+```{r}
+# Melt phyloseq and tally taxon counts across subjects
+taxa.counts <- 
+     psmelt(ps.adol) |> 
+     group_by(subj, OTU, name) |> 
+     summarize(detected = any(Abundance > 0)) |> 
+     ungroup() |> 
+     group_by(OTU, name) |> 
+     summarize(detected = sum(detected)/length(detected)) |> 
+     arrange(desc(detected)) 
+
+taxa.counts
+```
+
+```{r fig.height=3, fig.width=2}
+# What's the distribution of these prevalences?
+p.prev <- 
+     ggplot(taxa.counts, aes(x = detected * 100)) +
+     geom_histogram(binwidth = 5,
+                    boundary = 0) +
+     labs(x = 'Detected in\n[X%] of subjects', y = 'Frequency') +
+     xlim(0, 100) 
+
+p.prev
+```
+```{r}
+# ggsave('Fig S9a.pdf', height = 3, width = 2)
+```
+
+```{r}
+# Skewness
+e1071::skewness(taxa.counts$detected)
+```
+
+## B
+
+```{r}
+taxtab <- 
+     ps@tax_table@.Data |> 
+     data.frame()
+
+head(taxa_names(ps))
+```
+
+```{r}
+adult1.taxa <- 
+     ps |> 
+     subset_samples(study == 'Adult-1') %>%
+     prune_taxa(taxa_sums(.) > 0, .) |> 
+     taxa_names()
+
+adult2.taxa <- 
+     ps |> 
+     subset_samples(study == 'Adult-2') %>%
+     prune_taxa(taxa_sums(.) > 0, .) |> 
+     taxa_names()
+
+weightloss.taxa <- 
+     ps |> 
+     subset_samples(study == 'Weight Loss') %>%
+     prune_taxa(taxa_sums(.) > 0, .) |> 
+     taxa_names()
+
+adolescent.taxa <- 
+     ps |> 
+     subset_samples(study == 'Adolescent') %>%
+     prune_taxa(taxa_sums(.) > 0, .) |> 
+     taxa_names()
+```
+
+```{r}
+# How many detected in each?
+length(weightloss.taxa)
+length(adult1.taxa)
+length(adult2.taxa)
+length(adolescent.taxa)
+```
+
+```{r}
+# Check names equal count above
+union(weightloss.taxa, adult1.taxa) |> 
+     union(adult2.taxa) |> 
+     union(adolescent.taxa) |> 
+     length()
+```
+
+```{r}
+# How many *not* detected in each?
+146 - length(weightloss.taxa)
+146 - length(adult1.taxa)
+146 - length(adult2.taxa)
+146 - length(adolescent.taxa)
+```
+
+```{r}
+# Try dataframe structure for UpSet plot input
+input.df <- 
+     data.frame(taxon = taxa_names(ps)) |> 
+     mutate(`Weight Loss` = taxon %in% weightloss.taxa,
+            `Adult-1` = taxon %in% adult1.taxa,
+            `Adult-2` = taxon %in% adult2.taxa,
+            `Adolescent` = taxon %in% adolescent.taxa
+            ) |> 
+     mutate(across(.cols = -taxon,
+                   as.numeric))
+
+input.df
+```
+
+```{r fig.height=4, fig.width=6}
+upset(input.df,
+      sets = c('Adolescent', 'Adult-2', 'Adult-1', 'Weight Loss'),
+      keep.order = TRUE,
+      order.by = 'freq',
+      text.scale = 1.5,
+      mb.ratio = c(0.55, 0.45),
+      mainbar.y.label = 'Shared plants',
+      sets.x.label = 'Total plants') 
+```
+
+## C
+
+```{r}
+# Presence-absence data
+asvtab <-ps.adol@otu_table@.Data
+
+# Convert from counts to binary presence-absence
+asvtab[asvtab > 0] = 1
+asvtab[asvtab = 0] = 0
+
+asvtab |> as.numeric() |> unique()
+```
+
+```{r}
+# PCA
+pca <- prcomp(asvtab, 
+              center = TRUE, 
+              scale = FALSE)
+
+pca.df <- 
+        data.frame(pca$x) |> 
+        rownames_to_column(var = 'row')
+
+# % variance explained
+eigs <- pca$sdev^2
+ve.pc1 <- as.character(100*round(eigs[1] / sum(eigs), 3))
+ve.pc2 <- as.character(100*round(eigs[2] / sum(eigs), 3))
+
+# Add back sample data
+samdf <- 
+     ps.adol@sam_data |> 
+     data.frame() |> 
+     rownames_to_column(var = 'row')
+
+pca.df <- left_join(pca.df, samdf)
+
+# Calculate plotting limits based on largest value observed in PC axes 1 and 2
+limit <- max(abs(pca.df[, c('PC1', 'PC2')])) +
+          0.05*(max(abs(pca.df[, c('PC1', 'PC2')])))
+```
+
+#### Plot
+
+```{r fig.height=4, fig.width=4}
+pca.plot <- 
+     ggplot(pca.df, 
+            aes(x = PC1, y = PC2)) + 
+     geom_point(size = 2, alpha = 0.6) +
+     # scale_color_manual(values = read.depth.colors) + 
+     coord_equal() +
+     labs(x = paste0(' PC1 (', ve.pc1, '%)'),
+          y = paste0(' PC2 (', ve.pc2, '%)')) + 
+     xlim(-limit, limit) + ylim(-limit, limit) 
+     
+pca.plot
+```
+
+```{r}
+# ggsave('Fig S9c.pdf', device = cairo_pdf, height = 4, width = 4)
+```
