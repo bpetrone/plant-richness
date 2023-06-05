@@ -1,6 +1,6 @@
 # plant-richness
 
-DOI: [https://doi.org/10.1101/2022.06.13.22276343](https://doi.org/10.1101/2022.06.13.22276343)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8004413.svg)](https://doi.org/10.5281/zenodo.8004413)
 
 This repository contains data and code to reproduce figures presented in the manuscript **Diversity of plant DNA in stool is linked to dietary quality, age, and household income.**
 
